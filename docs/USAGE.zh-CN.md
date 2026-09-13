@@ -394,7 +394,7 @@ Exception: System.InvalidOperationException: Handle is not initialized.
 
 ## 7. 实测验证
 
-补丁加载 **18/18 全部成功**（`GameAPP_Awake/_Update`、`Board_UseSun/_UseMoney`、
+补丁加载 **17/17 全部成功**（`GameAPP_Awake/_Update`、`Board_UseSun/_UseMoney`、
 `Plant_TakeDamage/_RealTakeDamage/_DecreaseHealth`、`Zombie_TakeDamage`、`Bullet_InitData`、
 `Travel_AdvBuffPool/_UltiBuffPool`、`Advanture_OnInit`、`Abyss_GetTicket/_UseTicket`、`Mouse_Update`、
 `BoardSpawner_SummonZombies`、`Lawnf_GetGloveCD`）。
