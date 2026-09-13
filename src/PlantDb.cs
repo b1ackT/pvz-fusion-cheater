@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using UnityEngine;
@@ -631,6 +631,13 @@ namespace PvzRhCheat
             catch { return null; }
         }
 
+        /// <summary>
+        /// true = 当前正在由插件自己调用 SetPlant（融合 / 沙盒 / 批量变身 / 变身）。
+        /// 「一种种一排」的补丁靠它区分"玩家手动种的"和"插件自己放的"，
+        /// 否则插件放一株也会被铺满一行（融合时尤其离谱）。
+        /// </summary>
+        internal static bool Internal;
+
         /// <summary>在空格子上让游戏新建一株植物（完整初始化）</summary>
         internal static string SpawnAt(int col, int row, int typeId, Vector2 pos, out Plant created)
         {
@@ -639,11 +646,17 @@ namespace PvzRhCheat
             {
                 CreatePlant cp = CreatePlant.Instance;
                 if (cp == null) return "CreatePlant.Instance 为空";
-                created = cp.SetPlant(col, row, (PlantType)typeId, null, pos, true, true, null);
+                Internal = true;
+                try { created = cp.SetPlant(col, row, (PlantType)typeId, null, pos, true, true, null); }
+                finally { Internal = false; }
                 if (created == null) return "SetPlant 返回空";
                 return null;
             }
-            catch (Exception e) { return "SetPlant 异常 " + e.GetType().Name + " " + e.Message; }
+            catch (Exception e)
+            {
+                Internal = false;
+                return "SetPlant 异常 " + e.GetType().Name + " " + e.Message;
+            }
         }
 
         /// <summary>新植物建好之后的收尾：转移用户数值 + 强制刷新贴图/属性 + 选中</summary>

@@ -930,6 +930,23 @@ namespace PvzRhCheat
 
         // ---- 一次性动作（由 UI 按钮 / IPC 触发）----
 
+        /// <summary>
+        /// 模拟"玩家手动种一株"：直接调游戏的 SetPlant 且**不设** `PlantDb.Internal`，
+        /// 所以会正常触发「一种种一排」。自检用。
+        /// </summary>
+        internal static string ActionPlayerPlant(int typeId, int col, int row)
+        {
+            try
+            {
+                CreatePlant cp = CreatePlant.Instance;
+                if (cp == null) return "CreatePlant.Instance 为空（不在关卡内）";
+                Plant p = cp.SetPlant(col, row, (PlantType)typeId, null, new Vector2(0f, 0f), true, true, null);
+                if (p == null) return "SetPlant 返回空";
+                return "已按玩家方式种下 " + PlantDb.Label(p) + " 于 (" + col + "," + row + ")";
+            }
+            catch (Exception e) { return "种植失败: " + e.GetType().Name + " " + e.Message; }
+        }
+
         /// <summary>诊断：列出场上所有卡片的冷却状态（用来验证"卡片无冷却"有没有真的生效）</summary>
         internal static string ActionCardInfo()
         {
@@ -1020,14 +1037,63 @@ namespace PvzRhCheat
         }
 
         // ================================================================== 对齐 Modified-Plus 的额外功能
-        /// <summary>游戏速度：直接写 Time.timeScale。FastTick 用的是 unscaledTime，所以自己不会被拖慢。</summary>
+        /// <summary>
+        /// 游戏速度。
+        ///
+        /// 游戏自己有一个 `GameSpeedMgr`（暂停菜单里的倍速滑条）+ `GameConfig.gameSpeed`
+        /// + `GameSpeedMgr.Gears`（它自己的档位表）。所以严格来说游戏侧"有"这个功能，
+        /// 只是没有公开的"设置倍速"方法 —— 它就是把 `GameConfig.gameSpeed` 应用到 `Time.timeScale`。
+        ///
+        /// 这里两个都写：
+        ///   · `Time.timeScale`  —— 真正生效的地方
+        ///   · `GameAPP.config.gameSpeed` —— 让游戏自己的滑条/文字也同步，
+        ///     并且**防止游戏的 GameSpeedMgr.Update() 用旧值把 timeScale 覆盖回去**
+        /// </summary>
         internal static void GameSpeedTweak()
         {
             float want = 1f;
             try { want = ModConfig.GameSpeed.Value; } catch { }
             if (want < 0.05f) want = 0.05f;
             if (want > 20f) want = 20f;
+
+            // 同步游戏自己的配置项（它的滑条就是改这个）
+            try
+            {
+                GameConfig cfg = GameAPP.config;
+                if (cfg != null && Math.Abs(cfg.gameSpeed - want) > 0.001f) cfg.gameSpeed = want;
+            }
+            catch (Exception e) { LogSlow("speed/gameConfig", e); }
+
             try { if (Math.Abs(Time.timeScale - want) > 0.001f) Time.timeScale = want; } catch { }
+        }
+
+        /// <summary>诊断：游戏侧和 Unity 侧的速度各是多少、游戏自己的档位有哪些</summary>
+        internal static string SpeedInfo()
+        {
+            var sb = new System.Text.StringBuilder(300);
+            try { sb.Append("Time.timeScale=").Append(Time.timeScale.ToString("0.###")); }
+            catch { sb.Append("Time.timeScale=?"); }
+            try { sb.Append("  GameConfig.gameSpeed=").Append(GameAPP.config == null ? "无config" : GameAPP.config.gameSpeed.ToString("0.###")); }
+            catch (Exception e) { sb.Append("  gameSpeed读取失败 ").Append(e.GetType().Name); }
+            try { sb.Append("  配置里的GameSpeed=").Append(ModConfig.GameSpeed.Value.ToString("0.###")); } catch { }
+            try
+            {
+                var gears = GameSpeedMgr.Gears;
+                sb.Append("  游戏档位=[");
+                if (gears != null)
+                    for (int i = 0; i < gears.Count; i++) { if (i > 0) sb.Append(','); sb.Append(gears[i].ToString("0.##")); }
+                sb.Append(']');
+            }
+            catch (Exception e) { sb.Append("  档位读取失败 ").Append(e.GetType().Name); }
+            try
+            {
+                var arr = Actions.FindAll(typeof(GameSpeedMgr));
+                sb.Append("  GameSpeedMgr实例=").Append(arr == null ? -1 : arr.Length);
+            }
+            catch { }
+            string r = sb.ToString();
+            Plugin.Log.LogInfo("[速度] " + r);
+            return r;
         }
 
         /// <summary>僵尸血量倍率 + 僵尸无敌兜底回血</summary>
@@ -1833,6 +1899,73 @@ namespace PvzRhCheat
         private static void Postfix(ref float __result)
         {
             if (ModConfig.Enabled.Value && ModConfig.NoToolCooldown.Value) __result = 0f;
+        }
+    }
+
+    /// <summary>
+    /// 一种种一排（一列/一行铺满）。
+    ///
+    /// 游戏里**没有**现成的"种一排"函数（只找到 `Plant.InRow(int)`，那是个查询），
+    /// 所以这里挂在最终的种植入口 `CreatePlant.SetPlant` 上：
+    /// 玩家种下一株之后，把**同一行其它空格**也放上同一种植物。
+    ///
+    /// 三个注意点：
+    ///  1. 只用参数 + `__result`，**不注入 `__instance`**（那个在这套构建里崩过）。
+    ///  2. 用 `PlantDb.Internal` 区分"玩家种的"和"插件自己放的"，
+    ///     否则融合/沙盒/批量变身每放一株都会把整行铺满。
+    ///  3. 只在空格子上放，不覆盖已有植物；放不下去（水里/花盆限制）就跳过。
+    /// </summary>
+    [HarmonyPatch(typeof(CreatePlant), "SetPlant")]
+    internal static class Patch_CreatePlant_SetPlant
+    {
+        [HarmonyPostfix]
+        private static void Postfix(int newColumn, int newRow, PlantType theSeedType, Plant __result)
+        {
+            try
+            {
+                if (!ModConfig.Enabled.Value || !ModConfig.PlantWholeLine.Value) return;
+                if (PlantDb.Internal) return;          // 插件自己放的，不铺
+                if (__result == null) return;
+                Board b = Board.Instance;
+                if (b == null) return;
+                if (newRow < 0 || newRow > 6) return;
+
+                // 用"实际种出来的类型"而不是传入的类型：融合过的就在整条也放融合体
+                int type = (int)theSeedType;
+                try { type = (int)__result.thePlantType; } catch { }
+
+                // 方向：col = 一列（竖着；游戏里那个"一种种一列"词条就是这个，也是默认）
+                //       row = 一排（横着，整条车道）
+                bool vertical = true;
+                try { vertical = ModConfig.PlantLineDir.Value != "row"; } catch { }
+
+                int n = 0;
+                if (vertical)
+                {
+                    for (int row = 0; row < 7; row++)
+                    {
+                        if (row == newRow) continue;
+                        Plant there = PlantDb.CellPlant(newColumn, row);
+                        if (there != null) continue;   // 已经有植物了，不动
+                        Plant made;
+                        if (PlantDb.SpawnAt(newColumn, row, type, new Vector2(0f, 0f), out made) == null) n++;
+                    }
+                    if (n > 0) Plugin.Log.LogInfo("[一种种一列] 第 " + (newColumn + 1) + " 列又补了 " + n + " 株 " + PlantDb.CnName(type));
+                }
+                else
+                {
+                    for (int col = 0; col < 9; col++)
+                    {
+                        if (col == newColumn) continue;
+                        Plant there = PlantDb.CellPlant(col, newRow);
+                        if (there != null) continue;
+                        Plant made;
+                        if (PlantDb.SpawnAt(col, newRow, type, new Vector2(0f, 0f), out made) == null) n++;
+                    }
+                    if (n > 0) Plugin.Log.LogInfo("[一种种一排] 第 " + (newRow + 1) + " 行又补了 " + n + " 株 " + PlantDb.CnName(type));
+                }
+            }
+            catch (Exception e) { Plugin.LogOnce("一种种一列", e); }
         }
     }
 

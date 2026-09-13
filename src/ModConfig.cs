@@ -107,6 +107,10 @@ namespace PvzRhCheat
         public static ConfigEntry<bool>   FreezeAllZombies;   // 持续冻结全场
         public static ConfigEntry<bool>   ZombiesStopMoving;  // 僵尸速度归零
         public static ConfigEntry<bool>   AutoKillZombies;    // 自动秒杀新出现的僵尸
+        /// <summary>一种种一列/一排：手动种一株就把同一条线（一列或一排）其它空格也种满</summary>
+        public static ConfigEntry<bool>   PlantWholeLine;
+        /// <summary>铺满方向："col" = 一列（竖着，默认），"row" = 一排（横着，整条车道）</summary>
+        public static ConfigEntry<string> PlantLineDir;
 
         // ---- 对齐 Modified-Plus 的额外功能 ----
         public static ConfigEntry<float>  GameSpeed;          // Time.timeScale
@@ -182,6 +186,10 @@ namespace PvzRhCheat
             FreezeAllZombies  = Reg(cfg.Bind("8-Classic", "FreezeAllZombies", false, "Keep all zombies frozen"), "FreezeAllZombies");
             ZombiesStopMoving = Reg(cfg.Bind("8-Classic", "ZombiesStopMoving", false, "Zombie speed set to zero"), "ZombiesStopMoving");
             AutoKillZombies   = Reg(cfg.Bind("8-Classic", "AutoKillZombies", false, "Automatically kill zombies as they appear"), "AutoKillZombies");
+            PlantWholeLine    = Reg(cfg.Bind("8-Classic", "PlantWholeLine", false,
+                "Plant one seed and the whole line (column by default) gets filled with the same plant"), "PlantWholeLine");
+            PlantLineDir      = Reg(cfg.Bind("8-Classic", "PlantLineDir", "col",
+                "Fill direction: col = vertical column (default), row = horizontal lane"), "PlantLineDir");
 
             // ---- 对齐 Modified-Plus 的额外功能（默认同样全关）----
             GameSpeed        = Reg(cfg.Bind("9-Extra", "GameSpeed", 1.0f,
@@ -233,7 +241,7 @@ namespace PvzRhCheat
             new[]{"AbyssMaxTickets","0"}, new[]{"AbyssInfiniteTickets","0"},
             new[]{"AutoCollectSun","0"}, new[]{"NoCardCooldown","0"}, new[]{"FreePlanting","0"},
             new[]{"UnlimitedCardUse","0"}, new[]{"FreezeAllZombies","0"},
-            new[]{"ZombiesStopMoving","0"}, new[]{"AutoKillZombies","0"},
+            new[]{"ZombiesStopMoving","0"}, new[]{"AutoKillZombies","0"}, new[]{"PlantWholeLine","0"}, new[]{"PlantLineDir","col"},
             new[]{"GameSpeed","1"}, new[]{"StopZombieSpawn","0"}, new[]{"ZombieInvincible","0"},
             new[]{"ZombieHpMultiplier","1"}, new[]{"NoToolCooldown","0"}, new[]{"UnlockAllPlants","0"},
         };

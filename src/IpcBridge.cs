@@ -270,6 +270,11 @@ namespace PvzRhCheat
                             }
                             break;
                         case "Tools": msg = Tools.Info(); break;
+                        case "SpeedInfo": msg = Actions.SpeedInfo(); break;
+                        case "RowPlant":
+                            msg = p.Length > 4 ? Actions.ActionPlayerPlant(I(p[2]), I(p[3]), I(p[4]))
+                                               : "用法: ACTION|RowPlant|类型|列|行";
+                            break;
                         case "Speed":
                             if (p.Length > 2) { ModConfig.GameSpeed.Value = F(p[2]); msg = "游戏速度 = " + ModConfig.GameSpeed.Value; }
                             else msg = "缺少倍率";

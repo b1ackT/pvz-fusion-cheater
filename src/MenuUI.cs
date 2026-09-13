@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using HarmonyLib;
@@ -138,7 +138,7 @@ namespace PvzRhCheat
             new[] { "TravelBuffs", "DamageReduction", "LuckyStrike", "DamageAmplification", "PlantZeroHealth", "BuffWhitelist", "UltiBuffWhitelist" },
             new[] { "TalentUnlockAll", "TalentStars", "DisableHardMode" },
             new[] { "AbyssMaxTickets", "AbyssInfiniteTickets" },
-            new[] { "AutoCollectSun", "NoCardCooldown", "FreePlanting", "UnlimitedCardUse", "FreezeAllZombies", "ZombiesStopMoving", "AutoKillZombies" },
+            new[] { "AutoCollectSun", "NoCardCooldown", "FreePlanting", "UnlimitedCardUse", "FreezeAllZombies", "ZombiesStopMoving", "AutoKillZombies", "PlantWholeLine", "PlantLineDir" },
             new[] { "GameSpeed", "StopZombieSpawn", "ZombieInvincible", "ZombieHpMultiplier", "NoToolCooldown" },
             new[] { "EspFontSize", "EspBold", "MenuFontSize", "AutoLaunchUi" },
         };
@@ -179,7 +179,9 @@ namespace PvzRhCheat
             { "FreezeAllZombies", "持续冻结全场僵尸" },
             { "ZombiesStopMoving", "僵尸停止移动" },
             { "AutoKillZombies", "自动秒杀新出现的僵尸" },
-            { "GameSpeed", "游戏速度倍率（Time.timeScale）" },
+            { "PlantWholeLine", "一种种一列（种一株铺满一整条）" },
+            { "PlantLineDir", "铺满方向：col=一列(竖) / row=一排(横)" },
+            { "GameSpeed", "游戏速度倍率（= 游戏自己的 GameConfig.gameSpeed + Time.timeScale）" },
             { "StopZombieSpawn", "停止出怪（关卡不再放僵尸）" },
             { "ZombieInvincible", "僵尸无敌（僵尸不再掉血）" },
             { "ZombieHpMultiplier", "僵尸血量倍率" },
@@ -1255,6 +1257,48 @@ namespace PvzRhCheat
                 SetStatus(Actions.ActionEnterGame(-1, 1));
             y += bh + 8f;
             // 一键把**所有**作弊项关掉（含配置里被写脏的），回到"什么都不改"的状态
+            // 一种种一列 / 一排
+            {
+                bool line = ModConfig.PlantWholeLine.Value;
+                bool vertical = ModConfig.PlantLineDir.Value != "row";
+                if (UiSkin.Button(new Rect(x0, y, bw, bh), line ? "一种种一列: 开" : "一种种一列: 关", line, true))
+                { ModConfig.PlantWholeLine.Value = !line; SetStatus("一种种一列 = " + (!line)); }
+                if (UiSkin.Button(new Rect(x1, y, bw, bh), vertical ? "方向: 一列（竖）" : "方向: 一排（横）", vertical, true))
+                { ModConfig.PlantLineDir.Value = vertical ? "row" : "col"; SetStatus("铺满方向改为 " + (vertical ? "一排（横）" : "一列（竖）")); }
+            }
+            y += bh + 8f;
+
+            // 游戏自己的倍速档位（GameSpeedMgr.Gears）：直接点它给的档
+            UiSkin.Text(new Rect(x0, y, bw, 18f), "游戏倍速（游戏自己的档位 + 自定义）",
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+            y += 19f;
+            float gx = x0;
+            float gw = 58f;
+            try
+            {
+                var gears = GameSpeedMgr.Gears;
+                if (gears != null)
+                {
+                    for (int i = 0; i < gears.Count && i < 6; i++)
+                    {
+                        float gv = gears[i];
+                        if (UiSkin.Button(new Rect(gx, y, gw, bh), gv.ToString("0.##") + "x", Math.Abs(ModConfig.GameSpeed.Value - gv) < 0.01f, true))
+                        { ModConfig.GameSpeed.Value = gv; SetStatus("游戏倍速 = " + gv.ToString("0.##") + "x"); }
+                        gx += gw + 6f;
+                    }
+                }
+            }
+            catch { }
+            if (UiSkin.Button(new Rect(gx, y, gw, bh), "0.5x", Math.Abs(ModConfig.GameSpeed.Value - 0.5f) < 0.01f, true))
+            { ModConfig.GameSpeed.Value = 0.5f; SetStatus("游戏倍速 = 0.5x"); }
+            gx += gw + 6f;
+            if (UiSkin.Button(new Rect(gx, y, gw, bh), "1x", Math.Abs(ModConfig.GameSpeed.Value - 1f) < 0.01f, true))
+            { ModConfig.GameSpeed.Value = 1f; SetStatus("游戏倍速 = 1x（恢复）"); }
+            gx += gw + 6f;
+            if (UiSkin.Button(new Rect(gx, y, 96f, bh), "速度诊断", false, true))
+                SetStatus(Actions.SpeedInfo());
+            y += bh + 8f;
+
             if (UiSkin.Button(new Rect(x0, y, bw, bh), "★ 一键关闭全部作弊", true, true))
             {
                 int n = ModConfig.ForceAllOff();

@@ -229,7 +229,7 @@
 | 天赋 | 天赋树全解锁 + 星星拉满 + 关困难模式 | 后置 `AdvantureData.OnInit` |
 | 深渊 | 抽奖券拉满 / 不消耗 | 后置 `AbyssData.GetTicket`；前缀改写 `UseTicket` |
 | 输入 | 鼠标压在菜单上时不响应游戏点击 | 前缀 `Mouse.Update` |
-| **速度** | **游戏倍速（0.05x~20x）** | 写 `Time.timeScale` |
+| **速度** | **游戏倍速（0.05x~20x）** | 写 `Time.timeScale` + `GameAPP.config.gameSpeed`（游戏自己的 `GameSpeedMgr.Gears` 档位：0.1~3） |
 | **僵尸** | **停止出怪** | 前缀跳过 `BoardSpawner.SummonZombies` |
 | **僵尸** | **僵尸无敌** | 前缀跳过 `Zombie.TakeDamage` |
 | **僵尸** | **僵尸血量倍率** | 周期写 `Zombie.theMaxHealth/theHealth` |
@@ -237,6 +237,7 @@
 | **工具** | **手套/锤子/铁锹 无冷却** | 周期把 `InGameUI.GloveBank/HammerBank/ShovelBank` 上 `InGameTool.CD` 清零 + 后置 `Lawnf.GetGloveCD` 返回 0 |
 | **植物** | **图鉴/植物池全解锁** | 填 `GodManager.godData.unlockedPlants` |
 | **植物** | **全体升级 / 满血 / 清空** | `Plant.Upgrade` / 写 `thePlantHealth` / `Plant.Die` |
+| **植物** | **一种种一列（种一株铺满一条）** | 后置 `CreatePlant.SetPlant`，靠 `PlantDb.Internal` 区分玩家/插件 |
 | **关卡** | **进关卡 / 旅行下一回合** | `UIMgr.EnterGame` / `Board.TravelNextRound` |
 
 ---
@@ -613,6 +614,54 @@ if (k < _scroll[0] || k >= _scroll[0] + visible) continue;
    子类若重写则那条路径拦不住。植物无敌额外加了"周期回满血"兜底。
 8. **未做动态调试**：本插件是"按签名打补丁 + 运行时日志验证"的产物，没有下断点逐帧跟踪。
    功能无效时把 `BepInEx\LogOutput.log` 里 `[FAIL]`/`[融合]`/`[词条白名单]` 开头的行发我。
+
+---
+
+### 6.13 「一种种一列」和「游戏倍速」—— 游戏里到底有没有现成函数
+
+**一种种一列：游戏里没有现成的。** 全量搜了 `PlantInRow` / `InRow` / `RowPlant` / `SameRow` /
+`PlantWholeRow` 之类，只找到 `Plant.InRow(int row)` —— 那是个**查询**，不是种植。
+（老修改器里那个"排山倒海：一种种一列"是它的**词条/buff**，不是游戏 API。）
+
+所以挂在最终种植入口 `CreatePlant.SetPlant` 上做**后置补种**：
+
+```csharp
+[HarmonyPatch(typeof(CreatePlant), "SetPlant")]
+Postfix(int newColumn, int newRow, PlantType theSeedType, Plant __result) {
+    // 玩家种下一株后，把同一条线上的其它空格也补上同一种
+}
+```
+
+要点：
+1. **只用参数 + `__result`，不注入 `__instance`**（那个在这套构建里把游戏搞崩过）。
+2. 用 `PlantDb.Internal` 区分"玩家手动种的"和"插件自己放的" ——
+   否则融合/沙盒/批量变身每放一株都会铺满一整条。`PlantDb.SpawnAt` 里会置位这个标记。
+3. 补种用**实际种出来的类型**（`__result.thePlantType`），所以融合体也会整条铺开；
+   只填空格、不覆盖已有植物，水里/花盆放不下去就跳过。
+4. **方向默认是"一列"（竖着，`PlantLineDir = col`）**，也就是游戏里那个"一种种一列"词条的效果；
+   想要横着铺满一整条车道就把 `PlantLineDir` 改成 `row`（界面上有按钮切）。
+
+实测：
+
+```
+开(默认 col 一列)  在 (3,2) 种一株  ->  第4列 行 [0,1,2,3,4]   共 5 株，日志"第 4 列又补了 4 株"
+切到 row 一排      在 (1,5) 种一株  ->  第6行 列 [0..8]        共 9 株
+插件自己放 (ACTION|Plant)           ->  只出 1 株（Internal 守卫生效）
+```
+
+**游戏倍速：游戏里确实有。** `GameSpeedMgr`（暂停菜单那个倍速滑条）+ `GameConfig.gameSpeed`
++ `GameSpeedMgr.Gears`（它自己的档位表）。实测档位：
+
+```
+游戏档位 = [0.1, 0.2, 0.5, 0.75, 1, 1.5, 2, 3]
+```
+
+它没有公开的"设置倍速"方法 —— 本质就是把 `GameConfig.gameSpeed` 应用到 `Time.timeScale`。
+所以现在**两个都写**：`Time.timeScale`（真正生效的）+ `GameAPP.config.gameSpeed`
+（让游戏自己的滑条/文字同步，也防止它的 `GameSpeedMgr.Update()` 用旧值把 timeScale 覆盖回去）。
+
+实测设 5x：`Time.timeScale=5  GameConfig.gameSpeed=5`，等 3 秒没被覆盖回去。
+「作弊动作」页直接列出**游戏自己的档位**当按钮，另加 0.5x / 1x(恢复) / 速度诊断。
 
 ---
 

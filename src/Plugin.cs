@@ -43,6 +43,7 @@ namespace PvzRhCheat
                 typeof(Patch_Mouse_Update),       // 鼠标压在菜单上时不响应游戏点击
                 typeof(Patch_BoardSpawner_SummonZombies), // 停止出怪
                 typeof(Patch_Lawnf_GetGloveCD),           // 手套无冷却（独立路径）
+                typeof(Patch_CreatePlant_SetPlant),       // 一种种一排
             };
             foreach (Type t in patches) TryPatch(harmony, t);
 
