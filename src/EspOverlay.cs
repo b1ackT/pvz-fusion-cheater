@@ -31,6 +31,7 @@ namespace PvzRhCheat
                 UiSkin.SetFontSize(Mathf.Clamp(ModConfig.EspFontSize.Value, 8, 48));
                 Keys();
                 if (ShowEsp) DrawEsp();
+                if (ModConfig.ZombieEsp.Value) DrawZombieEsp();
             }
             catch (Exception e) { Plugin.LogOnce("ESP", e); }
         }
@@ -111,6 +112,88 @@ namespace PvzRhCheat
                 if (e != null && e.type == EventType.MouseDown && e.button == 0 && rect.Contains(e.mousePosition))
                 {
                     Actions.Select(p);
+                    UiSkin.Click(rect, 0);
+                }
+            }
+        }
+
+        /// <summary>僵尸 ESP：和植物一样的方框，敌我颜色区分，点一下选中它</summary>
+        private void DrawZombieEsp()
+        {
+            Camera cam = Camera.main;
+            if (cam == null) return;
+            var arr = Actions.ZombiesSnapshot();
+            if (arr == null || arr.Count == 0) return;
+
+            int fs = UiSkin.FontSize > 0 ? UiSkin.FontSize : 18;
+            float h = fs + 12f;
+            float height = ModConfig.ZombieEspHeight.Value;
+
+            for (int i = 0; i < arr.Count; i++)
+            {
+                Zombie z = arr[i];
+                if (z == null) continue;
+
+                Vector3 wp;
+                try { wp = z.transform.position; } catch { continue; }
+                wp.y += height;
+
+                Vector3 sp = cam.WorldToScreenPoint(wp);
+                if (sp.z < 0f) continue;
+                float x = sp.x, sy = Screen.height - sp.y;
+                if (x < -400f || x > Screen.width + 400f || sy < -400f || sy > Screen.height + 400f) continue;
+
+                bool sel = Actions.IsZombieSelected(z);
+                bool mind = false;
+                try { mind = z.isMindControlled; } catch { }
+
+                // 颜色：被魅惑（友军）= 青绿，普通敌人 = 红，选中 = 亮黄
+                Color fill = sel ? new Color(0.55f, 0.45f, 0.05f, 0.95f)
+                           : mind ? new Color(0.05f, 0.32f, 0.34f, 0.92f)
+                                  : new Color(0.34f, 0.06f, 0.08f, 0.92f);
+                Color top = sel ? new Color(1f, 0.85f, 0.35f, 1f)
+                          : mind ? new Color(0.35f, 0.95f, 0.90f, 1f)
+                                 : new Color(1f, 0.45f, 0.45f, 1f);
+
+                var rect = new Rect(Mathf.Round(x - EspWidth * 0.5f), Mathf.Round(sy - h * 0.5f),
+                                    Mathf.Round(EspWidth), Mathf.Round(h));
+                Fill(rect, fill);
+                Fill(new Rect(rect.x, rect.y, rect.width, 3f), top);
+
+                string s = "";
+                try
+                {
+                    if (ShowIndex) s = "#" + i + " ";
+                    if (ModConfig.ZombieEspName.Value)
+                    {
+                        string cn = ZombieDb.CnName((int)z.theZombieType);
+                        if (string.IsNullOrEmpty(cn)) cn = z.theZombieType.ToString();
+                        s += cn;
+                    }
+                    if (ModConfig.ZombieEspHp.Value)
+                    {
+                        s += (s.Length > 0 ? "  " : "");
+                        long armor = 0;
+                        try { armor = z.theFirstArmorHealth; } catch { }
+                        s += z.theHealth + "/" + z.theMaxHealth;
+                        if (armor > 0) s += " +" + armor;
+                    }
+                }
+                catch { }
+
+                if (s.Length > 0)
+                    UiSkin.Text(rect, s, new UiSkin.TextOpt
+                    {
+                        Align = TextAnchor.MiddleCenter,
+                        Style = ModConfig.EspBold.Value ? FontStyle.Bold : FontStyle.Normal,
+                        Color = new Color(0.95f, 0.97f, 1f, 1f)
+                    });
+
+                if (MenuUI.BlocksGameInput()) continue;
+                Event e = Event.current;
+                if (e != null && e.type == EventType.MouseDown && e.button == 0 && rect.Contains(e.mousePosition))
+                {
+                    Actions.SelectZombie(z);
                     UiSkin.Click(rect, 0);
                 }
             }

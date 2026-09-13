@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using HarmonyLib;
 using Il2CppSystem.Collections.Generic;
@@ -32,6 +32,7 @@ namespace PvzRhCheat
             _nextFast = now + 0.25f;
 
             RefreshPlants();
+            try { RefreshZombies(); } catch (Exception e) { LogSlow("FastTick/僵尸", e); }
             RefreshLevelInfo();
 
             // 界面上点的"直接融合"在这里执行：不在 IMGUI 事件里动场景对象
@@ -634,36 +635,12 @@ namespace PvzRhCheat
 
         private static void ForEachZombie(Action<Zombie> fn)
         {
-            // 实测非泛型 FindObjectsOfType 对 Plant 会静默返回空，僵尸也一并不可信，
-            // 所以优先用游戏自己的 Lawnf.GetAllZombies(bool)（普通 + 被魅惑两批）
-            bool any = false;
-            for (int pass = 0; pass < 2; pass++)
+            // 直接复用多来源的僵尸列表（Lawnf.GetAllZombies + Board.zombieArray + FindObjectsOfType）。
+            // 实测 Lawnf.GetAllZombies 对"手动放的僵尸"不认，只靠它会一个都遍历不到。
+            var list = _zombies;
+            for (int i = 0; i < list.Count; i++)
             {
-                try
-                {
-                    var list = Lawnf.GetAllZombies(pass == 1);
-                    if (list == null) continue;
-                    for (int i = 0; i < list.Count; i++)
-                    {
-                        Zombie z = list[i];
-                        if (z == null) continue;
-                        any = true;
-                        try { fn(z); } catch { }
-                    }
-                }
-                catch (Exception e) { if (pass == 0) LogSlow("zombies/GetAllZombies", e); }
-            }
-            if (any) return;
-
-            // 兜底：老办法
-            var arr = FindAll(typeof(Zombie));
-            if (arr == null) return;
-            for (int i = 0; i < arr.Length; i++)
-            {
-                var o = arr[i];
-                if (o == null) continue;
-                Zombie z = null;
-                try { z = o.TryCast<Zombie>(); } catch { }
+                Zombie z = list[i];
                 if (z == null) continue;
                 try { fn(z); } catch { }
             }
@@ -688,6 +665,166 @@ namespace PvzRhCheat
         private static void FreezeOne(Zombie z) { try { z.SetFreeze(30f, 3); } catch { } }
         private static void StopOne(Zombie z) { try { z.theSpeed = 0f; } catch { } }
         private static void KillOne(Zombie z) { try { z.Die(0); } catch { } }
+
+        // ---------------------------------------------------------------- 僵尸列表 / 选中（和植物一个套路）
+        private static readonly System.Collections.Generic.List<Zombie> _zombies =
+            new System.Collections.Generic.List<Zombie>();
+        private static readonly System.Collections.Generic.HashSet<IntPtr> _zseen =
+            new System.Collections.Generic.HashSet<IntPtr>();
+        private static Zombie _zsel;
+
+        internal static void RefreshZombies()
+        {
+            _zombies.Clear();
+            _zseen.Clear();
+
+            // 多来源逐个尝试，并记录每个来源各找到几只（和植物列表一个套路）：
+            //  A) Lawnf.GetAllZombies(false/true)   —— 游戏自己的接口，但实测对"手动放的僵尸"可能不认
+            //  B) Board.zombieArray / zombieHead / zombieHeads —— 板子上的实际容器
+            //  C) 非泛型 FindObjectsOfType(Zombie)  —— 兜底
+            int nA = 0, nB = 0, nC = 0;
+
+            for (int pass = 0; pass < 2; pass++)
+            {
+                try
+                {
+                    var list = Lawnf.GetAllZombies(pass == 1);
+                    if (list != null)
+                        for (int i = 0; i < list.Count; i++) AddZombie(list[i]);
+                }
+                catch (Exception e) { LogSlow("zombies/GetAllZombies", e); }
+            }
+            nA = _zombies.Count;
+
+            try
+            {
+                Board b = Board.Instance;
+                if (b != null)
+                {
+                    AddZombies(b.zombieArray);
+                    AddZombies(b.zombieHead);
+                    try
+                    {
+                        var heads = b.zombieHeads;
+                        if (heads != null)
+                            foreach (var kv in heads) AddZombies(kv.Value);
+                    }
+                    catch (Exception e) { LogSlow("zombies/zombieHeads", e); }
+                }
+            }
+            catch (Exception e) { LogSlow("zombies/board", e); }
+            nB = _zombies.Count - nA;
+
+            try
+            {
+                var arr = FindAll(typeof(Zombie));
+                int before = _zombies.Count;
+                if (arr != null)
+                {
+                    for (int i = 0; i < arr.Length; i++)
+                    {
+                        var o = arr[i];
+                        if (o == null) continue;
+                        Zombie z = null;
+                        try { z = o.TryCast<Zombie>(); } catch { }
+                        if (z == null) continue;
+                        AddZombie(z);
+                    }
+                }
+                nC = _zombies.Count - before;
+            }
+            catch (Exception e) { LogSlow("zombies/find", e); }
+
+            _zombieSource = nB > 0 ? "board" : (nA > 0 ? "Lawnf" : (nC > 0 ? "find" : "none"));
+            _zsrcLawnf = nA; _zsrcBoard = nB; _zsrcFind = nC;
+
+            string sig = nA + "/" + nB + "/" + nC;
+            if (sig != _zombieSig)
+            {
+                _zombieSig = sig;
+                if (_zombies.Count > 0 || nA > 0 || nB > 0 || nC > 0)
+                    Plugin.Log.LogInfo("[僵尸] 来源=" + _zombieSource + " 合计=" + _zombies.Count
+                                     + "  | board=" + nB + " Lawnf=" + nA + " find=" + nC);
+            }
+
+            // 施加每只的行为覆盖（无敌/停速/持续冻结/魅惑）
+            for (int i = 0; i < _zombies.Count; i++) ZombieOverrides.Apply(_zombies[i]);
+        }
+
+        private static void AddZombies(Il2CppSystem.Collections.Generic.List<Zombie> list)
+        {
+            if (list == null) return;
+            int n = list.Count;
+            for (int i = 0; i < n; i++) AddZombie(list[i]);
+        }
+
+        private static void AddZombie(Zombie z)
+        {
+            if (z == null) return;
+            IntPtr k;
+            try { k = z.Pointer; } catch { return; }
+            if (k == IntPtr.Zero) return;
+            if (!_zseen.Add(k)) return;
+            _zombies.Add(z);
+        }
+
+        private static string _zombieSig = "";
+        private static string _zombieSource = "none";
+        private static int _zsrcLawnf, _zsrcBoard, _zsrcFind;
+
+        internal static string ZombieSource() { return _zombieSource; }
+        internal static int ZSrcBoard() { return _zsrcBoard; }
+        internal static int ZSrcLawnf() { return _zsrcLawnf; }
+        internal static int ZSrcFind() { return _zsrcFind; }
+
+        internal static System.Collections.Generic.List<Zombie> ZombiesSnapshot() { return _zombies; }
+
+        internal static Zombie ZombieAt(int index)
+        {
+            return (index >= 0 && index < _zombies.Count) ? _zombies[index] : null;
+        }
+
+        internal static Zombie SelectedZombie() { return _zsel; }
+        internal static void SelectZombie(Zombie z) { _zsel = z; }
+
+        internal static int ZombieSelIndex()
+        {
+            if (_zsel == null) return -1;
+            try
+            {
+                for (int i = 0; i < _zombies.Count; i++)
+                    if (_zombies[i] != null && _zombies[i].Pointer == _zsel.Pointer) return i;
+            }
+            catch { }
+            return -1;
+        }
+
+        internal static long ZombieSelPtr()
+        {
+            try { return _zsel == null ? 0L : _zsel.Pointer.ToInt64(); } catch { return 0L; }
+        }
+
+        internal static Zombie ZombieByPtr(long ptr)
+        {
+            if (ptr == 0L) return null;
+            try
+            {
+                for (int i = 0; i < _zombies.Count; i++)
+                {
+                    Zombie z = _zombies[i];
+                    if (z == null) continue;
+                    if (z.Pointer.ToInt64() == ptr) return z;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        internal static bool IsZombieSelected(Zombie z)
+        {
+            if (z == null || _zsel == null) return false;
+            try { return _zsel.Pointer == z.Pointer; } catch { return false; }
+        }
 
         /// <summary>卡片的原始数值（按对象指针缓存），关闭作弊时用来还原</summary>
         private struct CardBase

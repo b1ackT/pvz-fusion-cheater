@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using BepInEx.Configuration;
@@ -93,6 +93,11 @@ namespace PvzRhCheat
         public static ConfigEntry<bool>   AutoLaunchUi;
         /// <summary>游戏内菜单字号</summary>
         public static ConfigEntry<int>    MenuFontSize;
+        /// <summary>僵尸 ESP</summary>
+        public static ConfigEntry<bool>   ZombieEsp;
+        public static ConfigEntry<bool>   ZombieEspName;
+        public static ConfigEntry<bool>   ZombieEspHp;
+        public static ConfigEntry<float>  ZombieEspHeight;
 
         // ---- 经典作弊 ----
         public static ConfigEntry<bool>   AutoCollectSun;     // TreasureData.autoCollect
@@ -163,6 +168,10 @@ namespace PvzRhCheat
             EspFontSize = Reg(cfg.Bind("7-ESP", "FontSize", 18, "ESP label font size (bigger = easier to read)"), "EspFontSize");
             EspBold     = Reg(cfg.Bind("7-ESP", "Bold", true, "ESP label bold"), "EspBold");
             MenuFontSize = Reg(cfg.Bind("7-ESP", "MenuFontSize", 14, "In-game menu font size (10-26)"), "MenuFontSize");
+            ZombieEsp       = Reg(cfg.Bind("7-ESP", "ZombieEsp", true, "Show ESP boxes above zombies"), "ZombieEsp");
+            ZombieEspName   = Reg(cfg.Bind("7-ESP", "ZombieEspName", true, "Show zombie name in the box"), "ZombieEspName");
+            ZombieEspHp     = Reg(cfg.Bind("7-ESP", "ZombieEspHp", true, "Show zombie HP in the box"), "ZombieEspHp");
+            ZombieEspHeight = Reg(cfg.Bind("7-ESP", "ZombieEspHeight", 1.1f, "Zombie ESP box height above the sprite"), "ZombieEspHeight");
             // 内置菜单已经覆盖全部功能，外置窗口默认不再自动弹出
             AutoLaunchUi = Reg(cfg.Bind("7-ESP", "AutoLaunchUi", false, "Launch the standalone WinForms window at startup (not needed: the in-game menu has everything)"), "AutoLaunchUi");
 

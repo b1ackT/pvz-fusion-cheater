@@ -231,6 +231,44 @@ namespace PvzRhCheat
                         case "ImportLineup": msg = p.Length > 2 ? Actions.ActionImportLineup(p[2]) : "缺少阵容码"; break;
                         case "Zombies": msg = "场上僵尸 " + Actions.ZombieCount() + " 只"; break;
                         case "Cards": msg = Actions.ActionCardInfo(); break;
+                        case "ZSel":
+                            if (p.Length > 2) { Actions.SelectZombie(Actions.ZombieByPtr(L(p[2]))); msg = "选中僵尸 " + p[2]; }
+                            else msg = "缺少指针";
+                            break;
+                        case "ZFreeze": { Zombie z = Actions.SelectedZombie(); if (z == null) msg = "没有选中僵尸"; else { z.SetFreeze(30f, 3); msg = "已冻结"; } } break;
+                        case "ZKill": { Zombie z = Actions.SelectedZombie(); if (z == null) msg = "没有选中僵尸"; else { z.Die(0); msg = "已秒杀"; } } break;
+                        case "ZMind":
+                            {
+                                Zombie z = Actions.SelectedZombie();
+                                if (z == null) { msg = "没有选中僵尸"; break; }
+                                int lv = p.Length > 2 ? I(p[2]) : 0;
+                                z.SetMindControl(lv);
+                                msg = "SetMindControl(" + lv + ") 之后 isMindControlled=" + z.isMindControlled;
+                            }
+                            break;
+                        case "ZSet":
+                            {
+                                Zombie z = Actions.SelectedZombie();
+                                if (z == null) { msg = "没有选中僵尸"; break; }
+                                if (p.Length < 4) { msg = "用法: ACTION|ZSet|字段下标|值"; break; }
+                                int fi = I(p[2]);
+                                string e = ZombieDb.SetValue(z, fi, p[3]);
+                                msg = e == null ? ("僵尸·" + ZombieDb.FieldName(fi) + " = " + p[3]) : e;
+                            }
+                            break;
+                        case "ZInfo":
+                            {
+                                Zombie z = Actions.SelectedZombie();
+                                if (z == null) { msg = "没有选中僵尸"; break; }
+                                var q = new System.Text.StringBuilder(240);
+                                for (int i = 0; i < ZombieDb.FieldCount; i++)
+                                    q.Append(ZombieDb.FieldName(i)).Append('=').Append(ZombieDb.GetLive(z, i)).Append("  ");
+                                for (int i = 0; i < ZombieDb.FlagCount; i++)
+                                    q.Append(ZombieDb.FlagName(i)).Append('=').Append(ZombieDb.GetFlag(z, i)).Append("  ");
+                                msg = ZombieDb.Label(z) + " | " + q;
+                                Plugin.Log.LogInfo("[僵尸] " + msg);
+                            }
+                            break;
                         case "Tools": msg = Tools.Info(); break;
                         case "Speed":
                             if (p.Length > 2) { ModConfig.GameSpeed.Value = F(p[2]); msg = "游戏速度 = " + ModConfig.GameSpeed.Value; }
@@ -401,6 +439,9 @@ namespace PvzRhCheat
             sb.Append(",\"selPtr\":").Append(Actions.SelectedPtr());
             sb.Append(",\"selected\":").Append(Actions.SelectedIndex());
             sb.Append(",\"count\":").Append(Actions.PlantsSnapshot().Count);
+            sb.Append(",\"zcount\":").Append(Actions.ZombiesSnapshot().Count);
+            sb.Append(",\"zselPtr\":").Append(Actions.ZombieSelPtr());
+            sb.Append(",\"zombies\":").Append(ZombiesJson());
             sb.Append(",\"srcLawnf\":").Append(Actions.SrcLawnf());
             sb.Append(",\"srcBoard\":").Append(Actions.SrcBoard());
             sb.Append(",\"srcFind\":").Append(Actions.SrcFind());
@@ -431,8 +472,7 @@ namespace PvzRhCheat
 
             // plants
             var plants = Actions.PlantsSnapshot();
-            sb.Append(",\"plants\":[");
-            for (int i = 0; i < plants.Count; i++)
+            sb.Append(",\"plants\":[");            for (int i = 0; i < plants.Count; i++)
             {
                 Plant p = plants[i];
                 if (i > 0) sb.Append(',');
@@ -468,6 +508,46 @@ namespace PvzRhCheat
             }
             sb.Append("]}");
             _snapshot = sb.ToString();
+        }
+
+        /// <summary>僵尸数组（给外置脚本/自检用）</summary>
+        private static string ZombiesJson()
+        {
+            var zs = Actions.ZombiesSnapshot();
+            var sb = new StringBuilder(2048);
+            sb.Append('[');
+            for (int i = 0; i < zs.Count; i++)
+            {
+                Zombie z = zs[i];
+                if (z == null) continue;
+                if (i > 0) sb.Append(',');
+                long hp = 0, mx = 0; int row = 0, typeId = -1, a1 = 0, lv = 0, frz = 0;
+                float spd = 0f;
+                bool mind = false;
+                try
+                {
+                    hp = z.theHealth; mx = z.theMaxHealth; row = z.theZombieRow;
+                    typeId = (int)z.theZombieType; a1 = z.theFirstArmorHealth;
+                    lv = z.level; frz = z.freezeLevel; spd = z.theSpeed; mind = z.isMindControlled;
+                }
+                catch { }
+                long ptr = 0L;
+                try { ptr = z.Pointer.ToInt64(); } catch { }
+                sb.Append("{\"i\":").Append(i)
+                  .Append(",\"ptr\":").Append(ptr)
+                  .Append(",\"name\":\"").Append(Esc(ZombieDb.CnName(typeId))).Append('"')
+                  .Append(",\"typeId\":").Append(typeId)
+                  .Append(",\"hp\":").Append(hp).Append(",\"maxhp\":").Append(mx)
+                  .Append(",\"armor\":").Append(a1).Append(",\"lv\":").Append(lv)
+                  .Append(",\"frz\":").Append(frz)
+                  .Append(",\"spd\":\"").Append(N(spd)).Append('"')
+                  .Append(",\"row\":").Append(row)
+                  .Append(",\"mind\":").Append(mind ? 1 : 0)
+                  .Append(",\"sel\":").Append(Actions.IsZombieSelected(z) ? 1 : 0)
+                  .Append('}');
+            }
+            sb.Append(']');
+            return sb.ToString();
         }
 
         private static int SafeTypeId(Plant p)

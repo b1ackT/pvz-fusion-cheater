@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using HarmonyLib;
@@ -24,7 +24,7 @@ namespace PvzRhCheat
         internal static Rect Panel;
 
         private static int _tab;
-        private static readonly int[] _scroll = new int[6];
+        private static readonly int[] _scroll = new int[7];
         /// <summary>本帧从滚轮拿到的滚动量（正=向下），Frame() 里只取一次</summary>
         private static int _wheel;
         private static readonly bool[] _groupOpen = GroupOpenDefault();
@@ -42,7 +42,7 @@ namespace PvzRhCheat
         private static Vector2 _dragOff;
 
         // 正在编辑的东西
-        private const int EK_NONE = 0, EK_PLANT = 1, EK_CONFIG = 2, EK_FILTER = 3, EK_SB = 4;
+        private const int EK_NONE = 0, EK_PLANT = 1, EK_CONFIG = 2, EK_FILTER = 3, EK_SB = 4, EK_ZOMBIE = 5;
         private static int _editKind = EK_NONE;
         private static int _editField = -1;
         private static string _editKey;
@@ -187,7 +187,7 @@ namespace PvzRhCheat
             { "UnlockAllPlants", "植物图鉴 / 植物池全解锁" },
         };
 
-        private static readonly string[] TabNames = { "功能开关", "植物", "融合", "沙盒", "作弊动作", "设置" };
+        private static readonly string[] TabNames = { "功能开关", "植物", "僵尸", "融合", "沙盒", "作弊动作", "设置" };
 
         // ---------------------------------------------------------------- 对外
         /// <summary>鼠标是否压在菜单上 —— 用来屏蔽游戏自己的鼠标操作</summary>
@@ -250,9 +250,10 @@ namespace PvzRhCheat
                     {
                         case 0: TabToggles(cr); break;
                         case 1: TabPlants(cr); break;
-                        case 2: TabFusion(cr); break;
-                        case 3: TabSandbox(cr); break;
-                        case 4: TabActions(cr); break;
+                        case 2: TabZombies(cr); break;
+                        case 3: TabFusion(cr); break;
+                        case 4: TabSandbox(cr); break;
+                        case 5: TabActions(cr); break;
                         default: TabSettings(cr); break;
                     }
                 }
@@ -481,6 +482,17 @@ namespace PvzRhCheat
                 { SetStatus("不是合法整数"); return; }
                 SbSetInt(f, v);
                 SetStatus("已设置 = " + SbGetInt(f));
+                return;
+            }
+
+            if (kind == EK_ZOMBIE)
+            {
+                Zombie z = Actions.ZombieByPtr(ptr);
+                if (z == null) { SetStatus("该僵尸已经不在了"); return; }
+                string e = ZombieDb.SetValue(z, fi, buf);
+                SetStatus(e == null
+                    ? ("已修改 僵尸·" + ZombieDb.FieldName(fi) + " = " + buf)
+                    : ("僵尸·" + ZombieDb.FieldName(fi) + " 修改失败：" + e));
                 return;
             }
 
@@ -792,7 +804,151 @@ namespace PvzRhCheat
             if (UiSkin.Button(b3, "去融合页", false, true)) _tab = 2;
         }
 
-        // ================================================================ 页 2 融合
+        // ================================================================ 页 2 僵尸
+        private static void TabZombies(Rect cr)
+        {
+            var list = Actions.ZombiesSnapshot();
+            int sel = Actions.ZombieSelIndex();
+            Zombie selZ = sel >= 0 ? Actions.ZombieAt(sel) : null;
+
+            float lw = 268f;
+            Rect left = new Rect(cr.x, cr.y, lw, cr.height);
+            Rect right = new Rect(cr.x + lw + 10f, cr.y, cr.width - lw - 10f, cr.height);
+
+            Fill(left, UiSkin.ColBack2);
+            UiSkin.Border(left, UiSkin.ColLine);
+            float rh = RowH;
+            UiSkin.Text(new Rect(left.x + 6f, left.y + 2f, left.width - 12f, rh),
+                "场上僵尸 " + list.Count + " 只   （来源: Lawnf.GetAllZombies）", UiSkin.Bold);
+
+            Rect larea = new Rect(left.x + 4f, left.y + rh + 2f, left.width - 8f, left.height - rh - 30f);
+            int vis = Mathf.Max(1, (int)(larea.height / rh));
+            int maxScroll = Mathf.Max(0, list.Count - vis);
+            if (_scroll[2] > maxScroll) _scroll[2] = maxScroll;
+            if (_scroll[2] < 0) _scroll[2] = 0;
+            int w = _wheel;
+            if (w != 0 && UiSkin.MouseOver(larea)) { _scroll[2] = Mathf.Clamp(_scroll[2] + w, 0, maxScroll); _wheel = 0; }
+
+            if (list.Count == 0)
+                UiSkin.Text(new Rect(larea.x + 4f, larea.y + 4f, larea.width - 8f, rh * 3f),
+                    "这一关目前没有僵尸。\n僵尸出现后这里会列出来，\n也可以直接点僵尸头上的 ESP 方框选中它。",
+                    new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+
+            float y = larea.y;
+            for (int i = _scroll[2]; i < list.Count && i < _scroll[2] + vis; i++)
+            {
+                Zombie z = list[i];
+                if (z == null) continue;
+                bool isSel = i == sel;
+                Rect r = new Rect(larea.x, y, larea.width, rh);
+                string txt;
+                bool mind = false;
+                try { mind = z.isMindControlled; } catch { }
+                try { txt = ZombieDb.Label(z) + "  " + z.theHealth + "/" + z.theMaxHealth + "  行" + (z.theZombieRow + 1); }
+                catch { txt = ZombieDb.Label(z); }
+                if (mind) txt = "★" + txt;
+
+                Fill(r, isSel ? new Color(0.16f, 0.34f, 0.24f, 1f)
+                              : mind ? new Color(0.10f, 0.24f, 0.26f, 1f) : UiSkin.ColBack);
+                if (isSel) Fill(new Rect(r.x, r.y, 4f, r.height), UiSkin.ColGreen);
+                else if (mind) Fill(new Rect(r.x, r.y, 4f, r.height), new Color(0.35f, 0.95f, 0.90f, 1f));
+                UiSkin.Text(new Rect(r.x + 9f, r.y, r.width - 12f, r.height), UiSkin.Fit(txt, 26),
+                    new UiSkin.TextOpt
+                    {
+                        Align = TextAnchor.MiddleLeft,
+                        Style = isSel ? FontStyle.Bold : FontStyle.Normal,
+                        Color = isSel ? UiSkin.ColGreen : UiSkin.ColText
+                    });
+                if (UiSkin.Click(r, 0)) Actions.SelectZombie(z);
+                y += rh;
+            }
+
+            Rect clr = new Rect(left.x + 4f, left.yMax - 26f, left.width - 8f, 22f);
+            if (UiSkin.Button(clr, "取消选择", false, true)) Actions.SelectZombie(null);
+
+            // ---------------- 右侧编辑器
+            Fill(right, UiSkin.ColBack2);
+            UiSkin.Border(right, UiSkin.ColLine);
+
+            if (selZ == null)
+            {
+                UiSkin.Text(new Rect(right.x + 10f, right.y + 10f, right.width - 20f, 120f),
+                    "没有选中僵尸。\n\n1) 点一下僵尸头上那个红色（或青色）的方框\n2) 或在左边列表里点一只\n\n选中后这里会显示它的全部数值，改多少就是多少。\n" +
+                    "★ = 已被魅惑（友军），方框是青色的。",
+                    new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+                return;
+            }
+
+            long zptr = 0L;
+            try { zptr = selZ.Pointer.ToInt64(); } catch { }
+            string kind = "";
+            try { kind = selZ.isMindControlled ? "  [友军/魅惑]" : "  [敌人]"; } catch { }
+            UiSkin.Text(new Rect(right.x + 8f, right.y + 3f, right.width - 16f, rh),
+                "已选中: " + ZombieDb.Label(selZ) + kind + "    指针 0x" + zptr.ToString("X"), UiSkin.Bold);
+
+            float colW = (right.width - 20f) / 2f;
+            float fy = right.y + rh + 4f;
+            int n = ZombieDb.FieldCount;                  // 14 项 -> 7 行
+            int rows = (n + 1) / 2;
+            float avail = right.height - rh - 4f - 22f * 3f - 6f;
+            float cellH = Mathf.Clamp(avail / Mathf.Max(1, rows), 17f, rh);
+
+            for (int fi = 0; fi < n; fi++)
+            {
+                int col = fi / rows, row = fi % rows;
+                Rect cell = new Rect(right.x + 6f + col * colW, fy + row * cellH, colW - 6f, cellH);
+                bool editing = _editKind == EK_ZOMBIE && _editField == fi && _editPtr == zptr;
+                string val = ZombieDb.GetLive(selZ, fi);
+                if (!string.IsNullOrEmpty(ZombieDb.FieldUnit(fi))) val += ZombieDb.FieldUnit(fi);
+                bool ovr = ZombieDb.IsOverridden(selZ, fi);
+
+                bool reset;
+                if (ValueCell(cell, ZombieDb.FieldName(fi), val, ovr, editing, UiSkin.ColText, out reset))
+                {
+                    if (reset) { ZombieDb.ClearField(selZ, fi); SetStatus("已还原 " + ZombieDb.FieldName(fi)); }
+                    else BeginEditZombie(selZ, fi);
+                }
+            }
+
+            // 行为开关
+            float gy = fy + rows * cellH + 4f;
+            UiSkin.Text(new Rect(right.x + 8f, gy, right.width - 16f, 18f), "行为开关", UiSkin.Bold);
+            gy += 19f;
+            int fn = ZombieDb.FlagCount;
+            float fw = (right.width - 20f) / 2f;
+            for (int i = 0; i < fn; i++)
+            {
+                int col = i / 2, row = i % 2;
+                Rect r = new Rect(right.x + 6f + col * fw, gy + row * 20f, fw - 6f, 19f);
+                bool v = ZombieDb.GetFlag(selZ, i);
+                Rect box = new Rect(r.x + 2f, r.y + (r.height - UiSkin.CheckSize) * 0.5f, UiSkin.CheckSize, UiSkin.CheckSize);
+                UiSkin.Checkbox(box, v);
+                UiSkin.Text(new Rect(box.xMax + 6f, r.y, r.width - 24f, r.height), ZombieDb.FlagName(i),
+                    new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = v ? FontStyle.Bold : FontStyle.Normal, Color = UiSkin.ColText });
+                if (UiSkin.Click(r, 0)) { ZombieDb.SetFlag(selZ, i, !v); SetStatus(ZombieDb.FlagName(i) + " = " + (!v)); }
+            }
+
+            float by = right.yMax - 24f;
+            Rect b1 = new Rect(right.x + 6f, by, 132f, 21f);
+            Rect b2 = new Rect(right.x + 144f, by, 132f, 21f);
+            Rect b3 = new Rect(right.x + 282f, by, 132f, 21f);
+            if (UiSkin.Button(b1, "秒杀这只僵尸", false, true)) { try { selZ.Die(0); } catch { } SetStatus("已秒杀"); }
+            if (UiSkin.Button(b2, "还原它的全部修改", false, true)) { ZombieDb.ClearAll(selZ); SetStatus("已还原该僵尸的全部修改"); }
+            if (UiSkin.Button(b3, "换成别的僵尸…", false, true)) { OpenPicker(7, 0); }
+        }
+
+        private static void BeginEditZombie(Zombie z, int fi)
+        {
+            _editKind = EK_ZOMBIE;
+            _editField = fi;
+            _editPtr = 0L;
+            try { _editPtr = z.Pointer.ToInt64(); } catch { }
+            _editBuf = ZombieDb.GetLive(z, fi) ?? "";
+            _editText = false;
+            SetStatus("正在编辑 僵尸·" + ZombieDb.FieldName(fi) + " —— 输入数值后回车确认，Esc 取消");
+        }
+
+        // ================================================================ 页 3 融合
         private static void TabFusion(Rect cr)
         {
             int sel = Actions.SelectedIndex();
@@ -1213,7 +1369,7 @@ namespace PvzRhCheat
         {
             _pickerOpen = true;
             _pickerTarget = target;
-            _pickerZombie = target == 4 || target == 6;
+            _pickerZombie = target == 4 || target == 6 || target == 7;
             _pickerFilter = "";
             _pickerPage = 0;
             PlantDb.FilterTypes("", _pickerZombie);
@@ -1239,7 +1395,8 @@ namespace PvzRhCheat
                 case 3: title = "沙盒：选择要放置的植物"; break;
                 case 4: title = "沙盒：选择要放置的僵尸"; break;
                 case 5: title = "群体变身：所有植物变成"; break;
-                default: title = "群体变身：所有僵尸变成"; break;
+                case 6: title = "群体变身：所有僵尸变成"; break;
+                default: title = "把选中的僵尸变成"; break;
             }
             UiSkin.Text(new Rect(p.x + 10f, p.y + 4f, p.width - 90f, 24f), title, UiSkin.Bold);
 
@@ -1306,7 +1463,14 @@ namespace PvzRhCheat
                     else if (_pickerTarget == 3) { SbSetInt(SB_PTYPE, id); SetStatus("沙盒植物 = " + PlantDb.CnName(id)); }
                     else if (_pickerTarget == 4) { SbSetInt(SB_ZTYPE, id); SetStatus("沙盒僵尸 = " + PlantDb.CnNameZombie(id)); }
                     else if (_pickerTarget == 5) { SbSetInt(SB_CPTYPE, id); SetStatus("群体变身目标 = " + PlantDb.CnName(id)); }
-                    else { SbSetInt(SB_CZTYPE, id); SetStatus("群体变身僵尸目标 = " + PlantDb.CnNameZombie(id)); }
+                    else if (_pickerTarget == 6) { SbSetInt(SB_CZTYPE, id); SetStatus("群体变身僵尸目标 = " + ZombieDb.CnName(id)); }
+                    else
+                    {
+                        int zs = Actions.ZombieSelIndex();
+                        Zombie zz = zs >= 0 ? Actions.ZombieAt(zs) : null;
+                        string e3 = ZombieDb.Transform(zz, id);
+                        SetStatus(e3 == null ? ("已变身成 " + ZombieDb.CnName(id)) : ("变身失败: " + e3));
+                    }
                 }
                 y += rh;
             }

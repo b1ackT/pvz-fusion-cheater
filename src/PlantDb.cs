@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using UnityEngine;
@@ -115,6 +115,7 @@ namespace PvzRhCheat
         private static int[] _zids;
         private static string[] _znms;
 
+        internal static int ZombieTypeCount { get { BuildZombieTypes(); return _zids.Length; } }
         internal static int ZombieTypeIdAt(int i) { BuildZombieTypes(); return (i >= 0 && i < _zids.Length) ? _zids[i] : -1; }
         internal static string ZombieTypeNameAt(int i) { BuildZombieTypes(); return (i >= 0 && i < _znms.Length) ? _znms[i] : ""; }
 
