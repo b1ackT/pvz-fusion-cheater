@@ -25,7 +25,15 @@ namespace PvzRhCheat
 
         private static int _tab;
         private static readonly int[] _scroll = new int[6];
-        private static readonly bool[] _groupOpen = new bool[16];
+        private static readonly bool[] _groupOpen = GroupOpenDefault();
+
+        /// <summary>默认**全部展开**：不然用户打开「功能开关」只看到 10 行组名，会以为开关没了。</summary>
+        private static bool[] GroupOpenDefault()
+        {
+            var a = new bool[16];
+            for (int i = 0; i < a.Length; i++) a[i] = true;
+            return a;
+        }
         private static readonly List<int> _filtered = new List<int>(800);
 
         private static bool _dragging;
@@ -269,7 +277,7 @@ namespace PvzRhCheat
             Rect closeR = new Rect(t.xMax - 54f, t.y + 2f, 48f, 21f);
 
             UiSkin.Text(new Rect(t.x + 10f, t.y, espR.x - t.x - 16f, t.height),
-                        "PVZ 融合版 3.9 修改器   v1.1（内置界面）", UiSkin.Bold);
+                        "PVZ 融合版 3.9 修改器   " + Plugin.Version + "（内置界面 · 6 页签）", UiSkin.Bold);
 
             if (UiSkin.SmallButton(espR, esp ? "ESP: 开" : "ESP: 关", esp, true))
                 EspOverlay.ShowEsp = !esp;
@@ -499,6 +507,21 @@ namespace PvzRhCheat
         private static void TabToggles(Rect cr)
         {
             float rh = RowH;
+
+            // 展开 / 折叠 全部（默认就是全部展开的，见 GroupOpenDefault）
+            Rect bAll = new Rect(cr.x, cr.y, 96f, 22f);
+            Rect bNon = new Rect(cr.x + 100f, cr.y, 96f, 22f);
+            if (UiSkin.Button(bAll, "展开全部", false, true))
+                for (int g = 0; g < GroupKeys.Length; g++) _groupOpen[g] = true;
+            if (UiSkin.Button(bNon, "折叠全部", false, true))
+                for (int g = 0; g < GroupKeys.Length; g++) _groupOpen[g] = false;
+            UiSkin.Text(new Rect(cr.x + 204f, cr.y, cr.width - 210f, 22f),
+                "开关默认全是关的。点整行勾选，点右边的数字框改数值。",
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+
+            Rect area = new Rect(cr.x, cr.y + 26f, cr.width, cr.height - 26f);
+            cr = area;
+
             int total = 0;
             for (int g = 0; g < GroupKeys.Length; g++)
             {
@@ -520,8 +543,9 @@ namespace PvzRhCheat
                 if (k >= _scroll[0] && k < _scroll[0] + visible)
                 {
                     Rect r = new Rect(cr.x, y, cr.width, rh);
-                    string title = (_groupOpen[g] ? "[-] " : "[+] ") + GroupNames[g];
-                    if (UiSkin.LeftButton(r, title + "    " + GroupHints[g], _groupOpen[g], UiSkin.ColGreen))
+                    string title = (_groupOpen[g] ? "[-] " : "[+] ") + GroupNames[g]
+                                 + "   (" + GroupKeys[g].Length + " 项)    " + GroupHints[g];
+                    if (UiSkin.LeftButton(r, title, _groupOpen[g], UiSkin.ColGreen))
                         _groupOpen[g] = !_groupOpen[g];
                     y += rh;
                 }
@@ -571,11 +595,28 @@ namespace PvzRhCheat
             if (y < cr.yMax - 24f)
             {
                 UiSkin.Text(new Rect(cr.x + 6f, y + 6f, cr.width - 12f, Mathf.Min(80f, cr.yMax - y - 10f)),
-                    _groupOpen[0] || _groupOpen[1] || _groupOpen[2] || _groupOpen[3]
-                        ? "点组名前面的 [−] 可以折叠这一组；滚轮上下滚动。"
-                        : "点任意一组的组名（[+] 那一行）展开它，里面就是这一组的开关。\n所有功能默认都是关闭的，需要哪个自己打开。\n\n布尔项：点整行就能勾选/取消。\n数值项：点右边的数字框，直接打字改，回车生效。",
+                    "点组名前面的 [−] 可以折叠这一组；滚轮上下滚动。\n布尔项：点整行就能勾选/取消。\n数值项：点右边的数字框，直接打字改，回车生效。",
                     new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
             }
+
+            // 滚动条 + 行号提示：不写出来用户不知道下面还有东西
+            float barX = cr.xMax + 2f;
+            Rect up = new Rect(barX, cr.y, 18f, 22f);
+            Rect dn = new Rect(barX, cr.yMax - 22f, 18f, 22f);
+            if (UiSkin.Button(up, "▲", false, _scroll[0] > 0)) _scroll[0] = Mathf.Max(0, _scroll[0] - 1);
+            if (UiSkin.Button(dn, "▼", false, _scroll[0] < total - visible)) _scroll[0] = Mathf.Min(Mathf.Max(0, total - visible), _scroll[0] + 1);
+            Rect track = new Rect(barX + 4f, cr.y + 24f, 10f, cr.height - 48f);
+            if (track.height > 10f)
+            {
+                Fill(track, UiSkin.ColBack);
+                float frac = (float)visible / Mathf.Max(1, total);
+                float th = Mathf.Max(18f, track.height * frac);
+                float tpos = total > visible ? (float)_scroll[0] / (total - visible) : 0f;
+                Fill(new Rect(track.x + 1f, track.y + (track.height - th) * tpos, track.width - 2f, th), UiSkin.ColLine);
+            }
+            UiSkin.Text(new Rect(cr.x + 6f, cr.yMax - 20f, cr.width - 30f, 18f),
+                "共 " + total + " 行，当前显示第 " + (_scroll[0] + 1) + " ~ " + Mathf.Min(total, _scroll[0] + visible) + " 行（滚轮 / ▲▼ 滚动）",
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
         }
 
         // ================================================================ 页 1 植物
@@ -620,8 +661,18 @@ namespace PvzRhCheat
                 Rect r = new Rect(larea.x, y, larea.width, rh);
                 string txt = PlantDb.Label(p);
                 try { txt += "   " + p.thePlantHealth + "/" + p.thePlantMaxHealth; } catch { }
-                if (UiSkin.LeftButton(r, UiSkin.Fit(txt, 26), isSel, isSel ? UiSkin.ColGreen : UiSkin.ColText))
-                    Actions.Select(p);
+                // 选中的行整行染色 + 左侧一条绿边，不再只画一根孤零零的绿条
+                Fill(r, isSel ? new Color(0.16f, 0.34f, 0.24f, 1f) : UiSkin.ColBack);
+                if (isSel) Fill(new Rect(r.x, r.y, 4f, r.height), UiSkin.ColGreen);
+                UiSkin.Text(new Rect(r.x + 9f, r.y, r.width - 12f, r.height),
+                            UiSkin.Fit(txt, 26),
+                            new UiSkin.TextOpt
+                            {
+                                Align = TextAnchor.MiddleLeft,
+                                Style = isSel ? FontStyle.Bold : FontStyle.Normal,
+                                Color = isSel ? UiSkin.ColGreen : UiSkin.ColText
+                            });
+                if (UiSkin.Click(r, 0)) Actions.Select(p);
                 y += rh;
             }
 
@@ -683,7 +734,7 @@ namespace PvzRhCheat
                 int col = i / 3, row = i % 3;
                 Rect r = new Rect(right.x + 6f + col * fw, gy + row * 20f, fw - 6f, 19f);
                 bool v = PlantDb.GetFlag(selP, i);
-                Rect box = new Rect(r.x + 2f, r.y + (r.height - 17f) * 0.5f, 17f, 17f);
+                Rect box = new Rect(r.x + 2f, r.y + (r.height - 18f) * 0.5f, 18f, 18f);
                 UiSkin.Checkbox(box, v);
                 UiSkin.Text(new Rect(box.xMax + 6f, r.y, r.width - 24f, r.height), PlantDb.FlagName(i),
                     new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = v ? FontStyle.Bold : FontStyle.Normal, Color = UiSkin.ColText });

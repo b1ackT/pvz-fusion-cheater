@@ -16,6 +16,8 @@ namespace PvzRhCheat
         public static bool Ready { get; private set; }
         /// <summary>皮肤字体是否含中文</summary>
         public static bool Cjk { get; private set; }
+        /// <summary>字体里到底有没有 ✓ 字形（只做记录，界面已经不用它画勾了）</summary>
+        public static bool HasTickGlyph { get; private set; }
 
         private static bool _tried;
 
@@ -71,9 +73,15 @@ namespace PvzRhCheat
             try
             {
                 Font f = GUI.skin.label.font;
-                if (f != null) Cjk = f.HasCharacter('中');
+                if (f != null)
+                {
+                    Cjk = f.HasCharacter('中');
+                    HasTickGlyph = f.HasCharacter('\u2713');
+                }
             }
             catch { }
+            Plugin.Log.LogInfo("[界面] 字体=" + name + " 含中文=" + Cjk + " 含✓字形=" + HasTickGlyph
+                             + "（勾选框已改为自绘，不依赖字体）");
 
             try { GUI.skin.box.normal.background = Texture2D.whiteTexture; } catch { }
 
@@ -168,31 +176,49 @@ namespace PvzRhCheat
 
         public static void Text(Rect r, string s) { Text(r, s, Left); }
 
-        /// <summary>画一个清晰的勾选框（勾用大一号字号的 ✓ 字形，避免糊成一团）</summary>
+        /// <summary>
+        /// 画勾。**故意不用字体里的 ✓ 字形**：
+        /// 这套构建的字体在某些字号下画不出 U+2713，Unity 会画"缺字方框"，
+        /// 表现就是一个亮绿色的大方块（用户截图里那个"超大绿色像素"就是它）。
+        /// 改成用整数坐标的小方块拼一个勾，跟字体完全无关，任何字号都清晰。
+        /// </summary>
+        public static void DrawCheck(Rect box, Color c)
+        {
+            float s = Mathf.Min(box.width, box.height);
+            float cw = Mathf.Max(2f, Mathf.Round(s / 4.5f));     // 每个小方块的边长
+            Stroke(box, cw, 0.12f, 0.52f, 0.40f, 0.80f, c);      // 短臂
+            Stroke(box, cw, 0.36f, 0.80f, 0.88f, 0.22f, c);      // 长臂
+        }
+
+        private static void Stroke(Rect box, float cw, float x0, float y0, float x1, float y1, Color c)
+        {
+            float w = box.width, h = box.height;
+            float dx = (x1 - x0) * w, dy = (y1 - y0) * h;
+            int n = Mathf.Max(2, Mathf.RoundToInt(Mathf.Max(Mathf.Abs(dx), Mathf.Abs(dy)) / cw));
+            for (int i = 0; i <= n; i++)
+            {
+                float t = (float)i / n;
+                float x = box.x + (x0 + (x1 - x0) * t) * w - cw * 0.5f;
+                float y = box.y + (y0 + (y1 - y0) * t) * h - cw * 0.5f;
+                Fill(new Rect(Mathf.Round(x), Mathf.Round(y), cw, cw), c);
+            }
+        }
+
+        /// <summary>画一个清晰的勾选框</summary>
         public static void Checkbox(Rect box, bool on)
         {
-            Fill(box, on ? new Color(0.16f, 0.46f, 0.25f, 1f) : new Color(0.17f, 0.18f, 0.22f, 1f));
+            Fill(box, on ? new Color(0.14f, 0.42f, 0.22f, 1f) : new Color(0.17f, 0.18f, 0.22f, 1f));
             Border(box, on ? ColGreen : ColLine);
             if (!on) return;
-            int old = _fontSize;
-            SetFontSize(Mathf.RoundToInt(box.height) + 3);
-            try
-            {
-                Text(box, Tick, new TextOpt
-                {
-                    Align = TextAnchor.MiddleCenter,
-                    Style = FontStyle.Bold,
-                    Color = new Color(0.88f, 1f, 0.88f, 1f)
-                });
-            }
-            finally { SetFontSize(old <= 0 ? 14 : old); }
+            Rect inner = new Rect(box.x + 2f, box.y + 2f, box.width - 4f, box.height - 4f);
+            DrawCheck(inner, new Color(0.92f, 1f, 0.92f, 1f));
         }
 
         /// <summary>绘制一个"勾选框 + 标题 + 描述"的整行开关，返回是否被点击</summary>
         public static bool CheckRow(Rect row, bool value, string title, string desc, bool hover)
         {
             Fill(row, hover ? ColRowOn : ColBack2);
-            Rect box = new Rect(row.x + 6f, row.y + (row.height - 17f) * 0.5f, 17f, 17f);
+            Rect box = new Rect(row.x + 6f, row.y + (row.height - 18f) * 0.5f, 18f, 18f);
             Checkbox(box, value);
 
             Text(new Rect(box.xMax + 8f, row.y, row.width - 210f, row.height), title,
