@@ -18,6 +18,8 @@ namespace PvzRhCheat
         public static bool Cjk { get; private set; }
         /// <summary>字体里到底有没有 ✓ 字形（只做记录，界面已经不用它画勾了）</summary>
         public static bool HasTickGlyph { get; private set; }
+        /// <summary>这套构建里 GUI.DrawTexture 到底能不能用（早期版本被剥离过）</summary>
+        public static bool DrawTextureWorks { get; private set; }
 
         private static bool _tried;
 
@@ -93,6 +95,34 @@ namespace PvzRhCheat
             try { ZeroOffsets(GUI.skin.label.margin); } catch { }
             try { ZeroOffsets(GUI.skin.box.padding); } catch { }
             try { ZeroOffsets(GUI.skin.box.margin); } catch { }
+            // box 的 border 必须清零：GUI.Box 用 9 宫格拉伸背景，
+            // border 比矩形本身还大时（我们要画 1~2px 的小方块）画出来的东西会比矩形大，
+            // 表现就是"自绘的小方块糊成一大块"（勾选框实测：期望 ~30 个像素、实际 328 个）
+            try { ZeroOffsets(GUI.skin.box.border); } catch { }
+            try
+            {
+                var bs = GUI.skin.box;
+                Plugin.Log.LogInfo("[界面] box 样式: border=" + bs.border.left + "/" + bs.border.right + "/"
+                    + bs.border.top + "/" + bs.border.bottom
+                    + " padding=" + bs.padding.left + " margin=" + bs.margin.left
+                    + " fixedW=" + bs.fixedWidth + " fixedH=" + bs.fixedHeight
+                    + " stretchW=" + bs.stretchWidth + " stretchH=" + bs.stretchHeight);
+            }
+            catch { }
+
+            // 探一下 DrawTexture 还能不能用：能用就用它画勾（细、清晰），
+            // 不能用就退回字体里的 ✓ 字形。GUI.Box 画 1~2px 的小方块在这套构建里会糊成一大块。
+            try
+            {
+                GUI.DrawTexture(new Rect(-100f, -100f, 2f, 2f), Texture2D.whiteTexture);
+                DrawTextureWorks = true;
+            }
+            catch (Exception e)
+            {
+                DrawTextureWorks = false;
+                Plugin.Log.LogWarning("[界面] GUI.DrawTexture 不可用（" + e.GetType().Name + "），勾选框改用字体 ✓");
+            }
+            Plugin.Log.LogInfo("[界面] 勾选框画法 = " + (DrawTextureWorks ? "DrawTexture 自绘" : "字体 ✓ 字形"));
 
             Ready = name != "NULL";
             if (!Ready) Plugin.Log.LogWarning("[界面] 没能给皮肤补上字体，界面文字会是空白");
@@ -104,6 +134,23 @@ namespace PvzRhCheat
         {
             if (o == null) return;
             o.left = 0; o.right = 0; o.top = 0; o.bottom = 0;
+        }
+
+        /// <summary>
+        /// 画一条 1px 线。**不用 GUI.Box**：box 是 9 宫格样式，
+        /// 画比 border 还小的矩形时会画出一大块（勾选框就是这么糊掉的）。
+        /// </summary>
+        private static void Pixel(Rect r, Color c)
+        {
+            Color o = GUI.color;
+            GUI.color = c;
+            try { GUI.DrawTexture(r, Texture2D.whiteTexture); }
+            catch
+            {
+                // DrawTexture 被剥离的话退回 Box（大矩形时 Box 是正常的）
+                try { GUI.Box(r, ""); } catch { }
+            }
+            finally { GUI.color = o; }
         }
 
         /// <summary>纯色填充（用 Box + GUI.color，绕开被裁掉的 DrawTexture）</summary>
@@ -182,14 +229,27 @@ namespace PvzRhCheat
         /// 表现就是一个亮绿色的大方块（用户截图里那个"超大绿色像素"就是它）。
         /// 改成用整数坐标的小方块拼一个勾，跟字体完全无关，任何字号都清晰。
         /// </summary>
+        /// <summary>
+        /// 画勾。
+        /// · DrawTexture 可用 → 自绘（2px 小方块沿两条斜线铺）。
+        /// · 不可用 → 用字体里的 ✓ 字形，但字号**必须收进框内**（box.height - 2），
+        ///   否则字形比框大、配合 clipping=Overflow 就会渲染成一大坨（用户看到的"超大绿色像素"）。
+        /// </summary>
         public static void DrawCheck(Rect box, Color c)
         {
+            if (!DrawTextureWorks)
+            {
+                int old = _fontSize;
+                SetFontSize(Mathf.Max(8, Mathf.RoundToInt(Mathf.Min(box.width, box.height)) - 2));
+                try { Text(box, Tick, new TextOpt { Align = TextAnchor.MiddleCenter, Style = FontStyle.Normal, Color = c }); }
+                finally { SetFontSize(old <= 0 ? 14 : old); }
+                return;
+            }
+
             float s = Mathf.Min(box.width, box.height);
-            // 小方块取 s/6：14px 的框里就是 2px 一格，勾形最干净
-            // （取 s/4.5 会变成 3px，关节处糊成一坨，实测对比过）
-            float cw = Mathf.Max(2f, Mathf.Round(s / 6f));
-            Stroke(box, cw, 0.14f, 0.50f, 0.40f, 0.78f, c);      // 短臂
-            Stroke(box, cw, 0.36f, 0.78f, 0.86f, 0.24f, c);      // 长臂
+            float cw = Mathf.Max(2f, Mathf.Round(s / 7f));
+            Stroke(box, cw, 0.10f, 0.44f, 0.38f, 0.76f, c);      // 短臂
+            Stroke(box, cw, 0.34f, 0.78f, 0.92f, 0.16f, c);      // 长臂
         }
 
         private static void Stroke(Rect box, float cw, float x0, float y0, float x1, float y1, Color c)
@@ -202,31 +262,35 @@ namespace PvzRhCheat
                 float t = (float)i / n;
                 float x = box.x + (x0 + (x1 - x0) * t) * w - cw * 0.5f;
                 float y = box.y + (y0 + (y1 - y0) * t) * h - cw * 0.5f;
-                Fill(new Rect(Mathf.Round(x), Mathf.Round(y), cw, cw), c);
+                // 关键：这些方块只有 2px，必须用 DrawTexture（Box 会把它糊成一大块）
+                Pixel(new Rect(Mathf.Round(x), Mathf.Round(y), cw, cw), c);
             }
         }
 
-        /// <summary>画一个清晰的勾选框</summary>
+        /// <summary>画一个清晰的勾选框（20x20，给自绘的勾留够像素）</summary>
         public static void Checkbox(Rect box, bool on)
         {
             Fill(box, on ? new Color(0.14f, 0.42f, 0.22f, 1f) : new Color(0.17f, 0.18f, 0.22f, 1f));
             Border(box, on ? ColGreen : ColLine);
             if (!on) return;
             Rect inner = new Rect(box.x + 2f, box.y + 2f, box.width - 4f, box.height - 4f);
-            DrawCheck(inner, new Color(0.92f, 1f, 0.92f, 1f));
+            DrawCheck(inner, new Color(0.96f, 1f, 0.96f, 1f));
         }
+
+        /// <summary>勾选框的标准边长</summary>
+        public const float CheckSize = 20f;
 
         /// <summary>绘制一个"勾选框 + 标题 + 描述"的整行开关，返回是否被点击</summary>
         public static bool CheckRow(Rect row, bool value, string title, string desc, bool hover)
         {
             Fill(row, hover ? ColRowOn : ColBack2);
-            Rect box = new Rect(row.x + 6f, row.y + (row.height - 18f) * 0.5f, 18f, 18f);
+            Rect box = new Rect(row.x + 6f, row.y + (row.height - CheckSize) * 0.5f, CheckSize, CheckSize);
             Checkbox(box, value);
 
-            Text(new Rect(box.xMax + 8f, row.y, row.width - 210f, row.height), title,
+            Text(new Rect(box.xMax + 8f, row.y, row.width - 216f, row.height), title,
                  value ? Bold : Left);
             if (!string.IsNullOrEmpty(desc))
-                Text(new Rect(row.xMax - 196f, row.y, 190f, row.height), desc, new TextOpt
+                Text(new Rect(row.xMax - 200f, row.y, 194f, row.height), desc, new TextOpt
                 { Align = TextAnchor.MiddleRight, Style = FontStyle.Normal, Color = ColDim, Dim = true });
             return Click(row, 0);
         }

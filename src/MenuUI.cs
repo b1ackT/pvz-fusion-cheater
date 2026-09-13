@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using HarmonyLib;
@@ -519,7 +519,7 @@ namespace PvzRhCheat
                 "开关默认全是关的。点整行勾选，点右边的数字框改数值。",
                 new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
 
-            Rect area = new Rect(cr.x, cr.y + 26f, cr.width, cr.height - 26f);
+            Rect area = new Rect(cr.x, cr.y + 26f, cr.width - 18f, cr.height - 26f - 22f);
             cr = area;
 
             int total = 0;
@@ -577,46 +577,44 @@ namespace PvzRhCheat
                     {
                         bool editing = _editKind == EK_CONFIG && _editKey == keys[i];
                         Fill(r, UiSkin.ColBack2);
-                        UiSkin.Text(new Rect(r.x + 6f, r.y, r.width - 150f, rh), label, UiSkin.Left);
-                        Rect box = new Rect(r.xMax - 140f, r.y + 2f, 96f, rh - 4f);
+                        // 三段固定宽度：中文标签 | 配置键名（右对齐、截断）| 数值框
+                        // 之前键名只给 38px，长键名会溢出到数值框上，把数字压在字母上（用户截图里就是 "9999SunFloor"）
+                        UiSkin.Text(new Rect(r.x + 6f, r.y, r.width - 288f, rh), label, UiSkin.Left);
+                        UiSkin.Text(new Rect(r.xMax - 278f, r.y, 174f, rh), UiSkin.Fit(keys[i], 20),
+                            new UiSkin.TextOpt { Align = TextAnchor.MiddleRight, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+                        Rect box = new Rect(r.xMax - 100f, r.y + 2f, 96f, rh - 4f);
                         Fill(box, editing ? UiSkin.ColEdit : new Color(0.07f, 0.08f, 0.10f, 1f));
                         UiSkin.Border(box, editing ? UiSkin.ColYellow : UiSkin.ColLine);
                         UiSkin.Text(box, UiSkin.Fit(editing ? _editBuf + "_" : ModConfig.GetString(entry), 13),
-                            new UiSkin.TextOpt { Align = TextAnchor.MiddleRight, Style = FontStyle.Bold, Color = UiSkin.ColYellow });
-                        UiSkin.Text(new Rect(r.xMax - 40f, r.y, 38f, rh), keys[i], new UiSkin.TextOpt
-                        { Align = TextAnchor.MiddleRight, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+                            new UiSkin.TextOpt { Align = TextAnchor.MiddleCenter, Style = FontStyle.Bold, Color = UiSkin.ColYellow });
                         if (UiSkin.Click(box, 0)) BeginEditConfig(keys[i]);
                     }
                     y += rh;
                 }
             }
 
-            // 折叠时把整页填满提示，别留一大块空白
-            if (y < cr.yMax - 24f)
-            {
-                UiSkin.Text(new Rect(cr.x + 6f, y + 6f, cr.width - 12f, Mathf.Min(80f, cr.yMax - y - 10f)),
-                    "点组名前面的 [−] 可以折叠这一组；滚轮上下滚动。\n布尔项：点整行就能勾选/取消。\n数值项：点右边的数字框，直接打字改，回车生效。",
-                    new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
-            }
+            // 提示行单独占一条，不要压在最后几行上（之前就压在"词条白名单"那行上，两边都看不清）
+            Rect hintBar = new Rect(cr.x + 4f, cr.yMax + 2f, cr.width - 8f, 18f);
+            UiSkin.Text(hintBar,
+                "共 " + total + " 行，当前显示第 " + (_scroll[0] + 1) + " ~ " + Mathf.Min(total, _scroll[0] + visible) + " 行（滚轮 / ▲▼ 滚动）",
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
 
-            // 滚动条 + 行号提示：不写出来用户不知道下面还有东西
-            float barX = cr.xMax + 2f;
-            Rect up = new Rect(barX, cr.y, 18f, 22f);
-            Rect dn = new Rect(barX, cr.yMax - 22f, 18f, 22f);
+            // 滚动条必须画在面板**里面**：之前放在 cr.xMax+2，结果探出面板右边界 9px，
+            // 截图里就是那条"伸出边框的灰色带子"
+            float barX = cr.xMax + 4f;
+            Rect up = new Rect(barX, cr.y, 12f, 20f);
+            Rect dn = new Rect(barX, cr.yMax - 20f, 12f, 20f);
             if (UiSkin.Button(up, "▲", false, _scroll[0] > 0)) _scroll[0] = Mathf.Max(0, _scroll[0] - 1);
             if (UiSkin.Button(dn, "▼", false, _scroll[0] < total - visible)) _scroll[0] = Mathf.Min(Mathf.Max(0, total - visible), _scroll[0] + 1);
-            Rect track = new Rect(barX + 4f, cr.y + 24f, 10f, cr.height - 48f);
+            Rect track = new Rect(barX + 2f, cr.y + 22f, 8f, cr.height - 44f);
             if (track.height > 10f)
             {
                 Fill(track, UiSkin.ColBack);
                 float frac = (float)visible / Mathf.Max(1, total);
                 float th = Mathf.Max(18f, track.height * frac);
                 float tpos = total > visible ? (float)_scroll[0] / (total - visible) : 0f;
-                Fill(new Rect(track.x + 1f, track.y + (track.height - th) * tpos, track.width - 2f, th), UiSkin.ColLine);
+                Fill(new Rect(track.x, track.y + (track.height - th) * tpos, track.width, th), UiSkin.ColLine);
             }
-            UiSkin.Text(new Rect(cr.x + 6f, cr.yMax - 20f, cr.width - 30f, 18f),
-                "共 " + total + " 行，当前显示第 " + (_scroll[0] + 1) + " ~ " + Mathf.Min(total, _scroll[0] + visible) + " 行（滚轮 / ▲▼ 滚动）",
-                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
         }
 
         // ================================================================ 页 1 植物
@@ -734,7 +732,7 @@ namespace PvzRhCheat
                 int col = i / 3, row = i % 3;
                 Rect r = new Rect(right.x + 6f + col * fw, gy + row * 20f, fw - 6f, 19f);
                 bool v = PlantDb.GetFlag(selP, i);
-                Rect box = new Rect(r.x + 2f, r.y + (r.height - 18f) * 0.5f, 18f, 18f);
+                Rect box = new Rect(r.x + 2f, r.y + (r.height - UiSkin.CheckSize) * 0.5f, UiSkin.CheckSize, UiSkin.CheckSize);
                 UiSkin.Checkbox(box, v);
                 UiSkin.Text(new Rect(box.xMax + 6f, r.y, r.width - 24f, r.height), PlantDb.FlagName(i),
                     new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = v ? FontStyle.Bold : FontStyle.Normal, Color = UiSkin.ColText });

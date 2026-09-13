@@ -406,16 +406,57 @@ Exception: System.InvalidOperationException: Handle is not initialized.
 同样地，`Plant.Upgrade(...)` 在这个构建里会**返回 false**（不是抛异常），
 所以升级动作必须"返回 false 就退回直接写 `theLevel`"，只按返回值判断会一株都升不了。
 
-### 6.8 用字体里的 ✓ 画勾会变成一个绿色大方块
+### 6.8 画勾这件事踩了三个坑（最后才拿到一个清晰的 ✓）
 
-字体 `HasCharacter('\u2713')` 返回 **true**，但实际渲染时
-（Bold + 比框大一号的字号 + `label.clipping = Overflow`）画出来是一坨亮绿色实心方块，
-看起来就像"一个超大的绿色像素"。
-**结论：这种环境下不要用字形画勾**，改成 `UiSkin.DrawCheck()` ——
-用整数坐标的小方块沿两条斜线铺出来，跟字体无关，任何字号都清晰。
+1. **字体字形**：`HasCharacter('\u2713')` 返回 **true**，但用
+   `SetFontSize(box.height + 3)` + `FontStyle.Bold` + `label.clipping = Overflow` 画出来，
+   是一坨比框还大的亮绿色实心块 —— 就是用户说的"超大绿色像素"。
+   字号必须**收进框内**（`box.height - 2`）才正常。
+2. **用 `GUI.Box` 画 2px 小方块**：`GUI.Box` 是 9 宫格样式，画比 border 还小的矩形时，
+   画出来的面积远大于矩形本身。实测自绘的勾期望约 30 个像素、实际量出来 **328 个**，
+   形状是一块 23x19 的实心板 —— 完全没有勾形。
+3. **`GUI.DrawTexture` 被剥离**：本来想用它画细线，运行日志明确说
+   `[界面] GUI.DrawTexture 不可用（NotSupportedException）`，
+   于是又退回了 `GUI.Box`，继续糊。
 
-另外「功能开关」页一开始是**全部折叠**的，用户打开只看到 10 行组名，
-会以为"开关少了"。现在默认全展开，并加了 `展开全部/折叠全部`、滚动条和行号提示。
+所以最后的做法是**运行时探测 + 自动选路**：
+
+```
+[界面] GUI.DrawTexture 不可用（NotSupportedException），勾选框改用字体 ✓
+[界面] 勾选框画法 = 字体 ✓ 字形
+```
+
+勾选框固定 20x20，勾用**字体 ✓、字号 = 框高-2**。
+实测像素图（G=绿边框 g=深绿底 #=勾）：
+
+```
+Gggggggggggg.#.ggggG
+Ggggggggggg.#.gggggG
+Gggggggggg.#.ggggggG
+Gggggggggg.#gggggggG
+Ggggggggg.#.gggggggG
+Gggggggg.#.ggggggggG
+Ggggg.#g.#gggggggggG
+Ggggg.#.#.gggggggggG
+Ggggg.##.ggggggggggG
+Gggggg.#.ggggggggggG
+```
+
+细笔画、整数像素、形状正确。
+**如果以后换到 `DrawTexture` 可用的构建**，代码会自动切到自绘路径（`UiSkin.DrawCheck`）。
+
+### 6.9 开分组默认折叠 = 用户以为"功能没了"
+
+「功能开关」页一开始 10 个分组全是折叠的，一打开只看到 10 行组名，
+用户反馈"开关什么的少了"。现在**默认全部展开**，组名上还标 `(N 项)`，
+并加了 `展开全部 / 折叠全部`、右侧滚动条 + `▲▼`、
+底部 `共 N 行，当前显示第 a ~ b 行` 提示。
+
+另外还有两个排版坑（都是像素扫描查出来的）：
+- 滚动条原来画在 `cr.xMax + 2`，**探出面板右边界 9px**，截图里是一条伸出边框的灰带子 → 挪到 `cr` 内部。
+- 配置键名原来只给 38px，长键名（`ZombieDamageTakenMultiplier`）会溢出并压在数值框上，
+  看起来像 `9999SunFloor` → 改成 **中文标签 | 键名（右对齐截断）| 数值框** 三段固定宽度。
+- `共 N 行` 那行原来画在列表最后一行上面 → 改成列表高度里先扣掉 22px，让它单独占一条。
 
 ---
 
