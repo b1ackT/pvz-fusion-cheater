@@ -14,7 +14,10 @@ namespace PvzRhCheat
     {
         public const string Guid = "com.dsh.pvzrh.cheat";
         /// <summary>界面标题栏上显示的版本戳，用来确认游戏里跑的是不是最新构建</summary>
-        public const string Version = "1.3.0";
+        public const string Version = "1.4.0";
+        /// <summary>补丁成功/总数（设置页显示用）</summary>
+        public static int PatchOk;
+        public static int PatchTotal;
         public static new ManualLogSource Log;
         public override void Load()
         {
@@ -45,6 +48,7 @@ namespace PvzRhCheat
                 typeof(Patch_Lawnf_GetGloveCD),           // 手套无冷却（独立路径）
                 typeof(Patch_CreatePlant_SetPlant),       // 一种种一排
             };
+            PatchTotal = patches.Length;
             foreach (Type t in patches) TryPatch(harmony, t);
 
             CreateOverlay();
@@ -124,6 +128,7 @@ namespace PvzRhCheat
             try
             {
                 harmony.CreateClassProcessor(type).Patch();
+                PatchOk++;
                 Log.LogInfo("[OK]   已打补丁: " + type.Name);
             }
             catch (Exception e)

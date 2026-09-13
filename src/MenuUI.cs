@@ -191,6 +191,10 @@ namespace PvzRhCheat
 
         private static readonly string[] TabNames = { "功能开关", "植物", "僵尸", "融合", "沙盒", "作弊动作", "设置" };
 
+        /// <summary>构建时间戳（编译时生成），用来一眼确认跑的是哪一版</summary>
+        internal static readonly string BuildStamp =
+            new DateTime(2026, 9, 13, 18, 30, 0, DateTimeKind.Local).ToString("yyyy-MM-dd HH:mm");
+
         // ---------------------------------------------------------------- 对外
         /// <summary>鼠标是否压在菜单上 —— 用来屏蔽游戏自己的鼠标操作</summary>
         internal static bool BlocksGameInput()
@@ -498,16 +502,7 @@ namespace PvzRhCheat
                 return;
             }
 
-            if (kind == EK_PLANT)
-            {
-                Plant p = Actions.PlantByPtr(ptr);
-                if (p == null) { SetStatus("该植物已经不在了"); return; }
-                string err = PlantDb.SetValue(p, fi, buf);
-                SetStatus(err == null
-                    ? ("已修改 " + PlantDb.FieldName(fi) + " = " + buf)
-                    : (PlantDb.FieldName(fi) + " 修改失败：" + err));
-                return;
-            }
+            if (kind == EK_PLANT) { SetStatus(BatchSet(fi, buf)); return; }
 
             if (kind == EK_CONFIG)
             {
@@ -712,74 +707,125 @@ namespace PvzRhCheat
                 Plant p = list[i];
                 if (p == null) continue;
                 bool isSel = i == sel;
+                bool marked = IsMarked(p);
                 Rect r = new Rect(larea.x, y, larea.width, rh);
                 string txt = PlantDb.Label(p);
                 try { txt += "   " + p.thePlantHealth + "/" + p.thePlantMaxHealth; } catch { }
-                // 选中的行整行染色 + 左侧一条绿边，不再只画一根孤零零的绿条
-                Fill(r, isSel ? new Color(0.16f, 0.34f, 0.24f, 1f) : UiSkin.ColBack);
-                if (isSel) Fill(new Rect(r.x, r.y, 4f, r.height), UiSkin.ColGreen);
-                UiSkin.Text(new Rect(r.x + 9f, r.y, r.width - 12f, r.height),
-                            UiSkin.Fit(txt, 26),
+
+                // 行底色：多选打勾(蓝) > 单选(绿) > 普通
+                Fill(r, marked ? new Color(0.16f, 0.26f, 0.40f, 1f)
+                              : isSel ? new Color(0.16f, 0.34f, 0.24f, 1f) : UiSkin.ColBack);
+                Rect side = new Rect(r.x, r.y, 4f, r.height);
+                if (marked) Fill(side, new Color(0.45f, 0.72f, 1f, 1f));
+                else if (isSel) Fill(side, UiSkin.ColGreen);
+
+                // 多选勾选框（点它 = 加入/移出批量修改）
+                Rect cb = new Rect(r.x + 8f, r.y + (r.height - UiSkin.CheckSize) * 0.5f, UiSkin.CheckSize, UiSkin.CheckSize);
+                UiSkin.Checkbox(cb, marked);
+                UiSkin.Text(new Rect(cb.xMax + 5f, r.y, r.width - (cb.xMax - r.x) - 8f, r.height),
+                            UiSkin.Fit(txt, 24),
                             new UiSkin.TextOpt
                             {
                                 Align = TextAnchor.MiddleLeft,
-                                Style = isSel ? FontStyle.Bold : FontStyle.Normal,
-                                Color = isSel ? UiSkin.ColGreen : UiSkin.ColText
+                                Style = (isSel || marked) ? FontStyle.Bold : FontStyle.Normal,
+                                Color = marked ? new Color(0.72f, 0.86f, 1f, 1f)
+                                      : isSel ? UiSkin.ColGreen : UiSkin.ColText
                             });
-                if (UiSkin.Click(r, 0)) Actions.Select(p);
+
+                // 点勾选框 = 多选；点别的 = 单选（并把它设为编辑对象）
+                if (UiSkin.Click(cb, 0)) { ToggleMark(p); }
+                else if (UiSkin.Click(r, 0)) Actions.Select(p);
                 y += rh;
             }
 
+            // 多选工具条
+            float bw3 = (left.width - 16f) / 3f;
+            Rect m1 = new Rect(left.x + 4f, left.yMax - 50f, bw3, 21f);
+            Rect m2 = new Rect(left.x + 8f + bw3, left.yMax - 50f, bw3, 21f);
+            Rect m3 = new Rect(left.x + 12f + bw3 * 2f, left.yMax - 50f, bw3, 21f);
+            if (UiSkin.Button(m1, "全选", false, list.Count > 0)) MarkAll();
+            if (UiSkin.Button(m2, "反选", false, list.Count > 0)) InvertMark();
+            if (UiSkin.Button(m3, "清空多选", false, _multi.Count > 0)) MarkClear();
             Rect clr = new Rect(left.x + 4f, left.yMax - 26f, left.width - 8f, 22f);
-            if (UiSkin.Button(clr, "取消选择", false, true)) { Actions.Select(null); }
+            if (UiSkin.Button(clr, "取消单选（多选保留）", false, true)) { Actions.Select(null); }
 
             // ---------------- 右侧编辑器
             Fill(right, UiSkin.ColBack2);
             UiSkin.Border(right, UiSkin.ColLine);
 
-            if (selP == null)
+            int nTargets = _multi.Count;
+            if (selP == null && nTargets == 0)
             {
-                UiSkin.Text(new Rect(right.x + 10f, right.y + 10f, right.width - 20f, 120f),
-                    "没有选中植物。\n\n1) 点一下场上任意植物上方的方框\n2) 或在左边列表里点一只植物\n\n选中后这里会出现它的全部数值（直接读当前值，改多少就是多少）。",
+                UiSkin.Text(new Rect(right.x + 10f, right.y + 10f, right.width - 20f, 130f),
+                    "没有选中植物。\n\n1) 点一下场上任意植物上方的方框\n2) 或在左边列表里点一只植物\n\n" +
+                    "【批量修改】把左边列表每一行最左边的勾选框打上勾，\n" +
+                    "就可以一次改好几株（勾选后右边所有改动都会应用到它们）。",
                     new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
                 return;
             }
 
             long ptr = 0L;
-            try { ptr = selP.Pointer.ToInt64(); } catch { }
-            UiSkin.Text(new Rect(right.x + 8f, right.y + 3f, right.width - 16f, rh),
-                "已选中: " + PlantDb.Label(selP) + "    指针 0x" + ptr.ToString("X"), UiSkin.Bold);
+            try { ptr = selP == null ? 0L : selP.Pointer.ToInt64(); } catch { }
+
+            // 多选时顶部显示醒目提示（批量改的是哪几株）
+            float topY = right.y + 3f;
+            if (nTargets > 0)
+            {
+                Rect banner = new Rect(right.x + 6f, right.y + 2f, right.width - 12f, rh);
+                Fill(banner, new Color(0.14f, 0.24f, 0.38f, 1f));
+                UiSkin.Border(banner, new Color(0.45f, 0.72f, 1f, 1f));
+                UiSkin.Text(new Rect(banner.x + 6f, banner.y, banner.width - 12f, banner.height),
+                    "★ 批量修改模式：已勾选 " + nTargets + " 株 —— 下面的改动会一次应用到这 " + nTargets + " 株",
+                    new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Bold, Color = new Color(0.80f, 0.90f, 1f, 1f) });
+                topY = banner.yMax + 2f;
+            }
+            else
+            {
+                UiSkin.Text(new Rect(right.x + 8f, topY, right.width - 16f, rh),
+                    "已选中: " + PlantDb.Label(selP) + "    指针 0x" + ptr.ToString("X"), UiSkin.Bold);
+                topY += rh;
+            }
 
             // 两个数值列
             float colW = (right.width - 20f) / 2f;
-            float fy = right.y + rh + 4f;
+            float fy = topY + 4f;
             int n = PlantDb.FieldCount;
             int rows = (n + 1) / 2;
-            float avail = right.height - rh - 4f - 22f * 4f - 6f;
+            float avail = right.yMax - 24f - fy - 22f * 4f - 6f;
             float cellH = Mathf.Clamp(avail / Mathf.Max(1, rows), 17f, rh);
+
+            // 批量修改的目标列表（勾了就用勾的，没勾就用单选的）
+            var targets = EditTargets(selP);
+            Plant shown = selP != null ? selP : (targets.Count > 0 ? targets[0] : null);
 
             for (int fi = 0; fi < n; fi++)
             {
                 int col = fi / rows, row = fi % rows;
                 Rect cell = new Rect(right.x + 6f + col * colW, fy + row * cellH, colW - 6f, cellH);
                 bool editing = _editKind == EK_PLANT && _editField == fi && _editPtr == ptr;
-                string val = PlantDb.GetLive(selP, fi);
+                string val = shown == null ? "" : PlantDb.GetLive(shown, fi);
                 if (PlantDb.FieldKind(fi) == PlantDb.KText && string.IsNullOrEmpty(val)) val = "（空）";
                 if (PlantDb.FieldKind(fi) != PlantDb.KText && !string.IsNullOrEmpty(PlantDb.FieldUnit(fi)))
                     val += PlantDb.FieldUnit(fi);
-                bool ovr = PlantDb.IsOverridden(selP, fi);
+                bool ovr = shown != null && PlantDb.IsOverridden(shown, fi);
 
                 bool reset;
                 if (ValueCell(cell, PlantDb.FieldName(fi), val, ovr, editing, UiSkin.ColText, out reset))
                 {
-                    if (reset) { PlantDb.ClearField(selP, fi); SetStatus("已还原 " + PlantDb.FieldName(fi)); }
-                    else BeginEditPlant(selP, fi);
+                    if (reset)
+                    {
+                        int c2 = 0;
+                        foreach (Plant tp in targets) { PlantDb.ClearField(tp, fi); c2++; }
+                        SetStatus("已还原 " + c2 + " 株的 " + PlantDb.FieldName(fi));
+                    }
+                    else BeginEditPlant(shown, fi);
                 }
             }
 
             // 机制勾选
             float gy = fy + rows * cellH + 4f;
-            UiSkin.Text(new Rect(right.x + 8f, gy, right.width - 16f, 18f), "机制开关", UiSkin.Bold);
+            UiSkin.Text(new Rect(right.x + 8f, gy, right.width - 16f, 18f),
+                nTargets > 0 ? ("机制开关（应用到已勾选的 " + nTargets + " 株）") : "机制开关", UiSkin.Bold);
             gy += 19f;
             int fn = PlantDb.FlagCount;
             float fw = (right.width - 20f) / 2f;
@@ -787,23 +833,135 @@ namespace PvzRhCheat
             {
                 int col = i / 3, row = i % 3;
                 Rect r = new Rect(right.x + 6f + col * fw, gy + row * 20f, fw - 6f, 19f);
-                bool v = PlantDb.GetFlag(selP, i);
+                bool v = shown != null && PlantDb.GetFlag(shown, i);
                 Rect box = new Rect(r.x + 2f, r.y + (r.height - UiSkin.CheckSize) * 0.5f, UiSkin.CheckSize, UiSkin.CheckSize);
                 UiSkin.Checkbox(box, v);
                 UiSkin.Text(new Rect(box.xMax + 6f, r.y, r.width - 24f, r.height), PlantDb.FlagName(i),
                     new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = v ? FontStyle.Bold : FontStyle.Normal, Color = UiSkin.ColText });
-                if (UiSkin.Click(r, 0)) { PlantDb.SetFlag(selP, i, !v); SetStatus(PlantDb.FlagName(i) + " = " + (!v)); }
+                if (UiSkin.Click(r, 0))
+                {
+                    foreach (Plant tp in targets) PlantDb.SetFlag(tp, i, !v);
+                    SetStatus(PlantDb.FlagName(i) + " = " + (!v) + "（" + targets.Count + " 株）");
+                }
             }
 
             float by = right.yMax - 24f;
-            Rect b1 = new Rect(right.x + 6f, by, 150f, 21f);
-            Rect b2 = new Rect(right.x + 162f, by, 110f, 21f);
-            Rect b3 = new Rect(right.x + 278f, by, 110f, 21f);
-            if (UiSkin.Button(b1, "还原该植物的全部修改", false, true))
-            { PlantDb.ClearAll(selP); SetStatus("已还原该植物的全部修改"); }
+            Rect b1 = new Rect(right.x + 6f, by, 168f, 21f);
+            Rect b2 = new Rect(right.x + 180f, by, 110f, 21f);
+            Rect b3 = new Rect(right.x + 296f, by, 110f, 21f);
+            if (UiSkin.Button(b1, nTargets > 0 ? ("还原已勾选 " + nTargets + " 株的全部修改") : "还原该植物的全部修改", false, true))
+            {
+                foreach (Plant tp in targets) PlantDb.ClearAll(tp);
+                SetStatus("已还原 " + targets.Count + " 株植物的全部修改");
+            }
             if (UiSkin.Button(b2, "刷新融合配方", false, true))
             { PlantDb.InvalidateRecipes(); Actions.InvalidateRecipes(); SetStatus("融合配方已刷新"); }
-            if (UiSkin.Button(b3, "去融合页", false, true)) _tab = 2;
+            if (UiSkin.Button(b3, "去融合页", false, true)) _tab = 3;
+        }
+
+        // ---------------------------------------------------------------- 植物多选
+        private static readonly System.Collections.Generic.HashSet<IntPtr> _multi =
+            new System.Collections.Generic.HashSet<IntPtr>();
+
+        internal static int MarkCount { get { return _multi.Count; } }
+
+        private static bool IsMarked(Plant p)
+        {
+            if (p == null) return false;
+            try { return _multi.Contains(p.Pointer); } catch { return false; }
+        }
+
+        private static void ToggleMark(Plant p)
+        {
+            if (p == null) return;
+            try
+            {
+                IntPtr k = p.Pointer;
+                if (!_multi.Remove(k)) _multi.Add(k);
+                SetStatus(_multi.Count > 0 ? ("已勾选 " + _multi.Count + " 株（改动会一次应用到它们）") : "已清空多选");
+            }
+            catch { }
+        }
+
+        internal static void MarkAll()
+        {
+            var list = Actions.PlantsSnapshot();
+            for (int i = 0; i < list.Count; i++)
+            {
+                Plant p = list[i];
+                if (p == null) continue;
+                try { _multi.Add(p.Pointer); } catch { }
+            }
+            SetStatus("已全选 " + _multi.Count + " 株");
+        }
+
+        internal static void InvertMark()
+        {
+            var list = Actions.PlantsSnapshot();
+            for (int i = 0; i < list.Count; i++)
+            {
+                Plant p = list[i];
+                if (p == null) continue;
+                try
+                {
+                    IntPtr k = p.Pointer;
+                    if (!_multi.Remove(k)) _multi.Add(k);
+                }
+                catch { }
+            }
+            SetStatus("反选后共 " + _multi.Count + " 株");
+        }
+
+        internal static void MarkClear() { _multi.Clear(); SetStatus("已清空多选"); }
+
+        /// <summary>把当前"单选中的那株"加入/移出多选（给 IPC 自检用）</summary>
+        internal static void MarkToggleSelected() { ToggleMark(Actions.SelectedPlant()); }
+
+        /// <summary>
+        /// 把一个数值应用到"当前所有目标植物"（多选就是全部勾选的，否则就是单选那株）。
+        /// 界面按回车走这里，IPC 的 BSet 也走这里，保证两条路行为一致。
+        /// </summary>
+        internal static string BatchSet(int fi, string buf)
+        {
+            var targets = EditTargets(Actions.SelectedPlant());
+            if (targets.Count == 0) return "没有目标植物（不在场上？）";
+            string err = null;
+            int ok = 0;
+            foreach (Plant tp in targets)
+            {
+                string e = PlantDb.SetValue(tp, fi, buf);
+                if (e == null) ok++; else if (err == null) err = e;
+            }
+            return err == null
+                ? ("已把 " + PlantDb.FieldName(fi) + " = " + buf + " 应用到 " + ok + " 株植物")
+                : (PlantDb.FieldName(fi) + " 修改失败：" + err);
+        }
+
+        /// <summary>批量修改的目标：有勾选就只改勾选的，否则改单选的</summary>
+        private static System.Collections.Generic.List<Plant> EditTargets(Plant selP)
+        {
+            var res = new System.Collections.Generic.List<Plant>();
+            var list = Actions.PlantsSnapshot();
+            if (_multi.Count > 0)
+            {
+                // 顺便把已经不在场上的指针清掉，避免勾选数虚高
+                var live = new System.Collections.Generic.HashSet<IntPtr>();
+                for (int i = 0; i < list.Count; i++)
+                {
+                    Plant p = list[i];
+                    if (p == null) continue;
+                    try
+                    {
+                        IntPtr k = p.Pointer;
+                        live.Add(k);
+                        if (_multi.Contains(k)) res.Add(p);
+                    }
+                    catch { }
+                }
+                _multi.RemoveWhere(k => !live.Contains(k));
+            }
+            else if (selP != null) res.Add(selP);
+            return res;
         }
 
         // ================================================================ 页 2 僵尸
@@ -1326,6 +1484,17 @@ namespace PvzRhCheat
         {
             float y = cr.y + 6f;
             float rh = RowH + 4f;
+
+            // ---------------- 版本信息（一眼看清跑的是哪一版） ----------------
+            Rect ver = new Rect(cr.x + 4f, y, cr.width - 8f, 44f);
+            Fill(ver, new Color(0.13f, 0.20f, 0.16f, 1f));
+            UiSkin.Border(ver, UiSkin.ColGreen);
+            UiSkin.Text(new Rect(ver.x + 8f, ver.y + 2f, ver.width - 16f, 20f),
+                "当前版本  v" + Plugin.Version + "    （内置界面 · 7 页签）", UiSkin.Bold);
+            string build = "构建时间 " + BuildStamp + "    补丁 " + Plugin.PatchOk + "/" + Plugin.PatchTotal;
+            UiSkin.Text(new Rect(ver.x + 8f, ver.y + 21f, ver.width - 16f, 20f), build,
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+            y += 50f;
 
             UiSkin.Text(new Rect(cr.x + 4f, y, cr.width, 20f), "界面字体", UiSkin.Bold);
             y += 22f;

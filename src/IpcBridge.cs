@@ -271,6 +271,13 @@ namespace PvzRhCheat
                             break;
                         case "Tools": msg = Tools.Info(); break;
                         case "SpeedInfo": msg = Actions.SpeedInfo(); break;
+                        case "Mark": Actions.SelectByPtr(L(p.Length > 2 ? p[2] : "0")); MenuUI.MarkToggleSelected(); msg = "多选数 = " + MenuUI.MarkCount; break;
+                        case "MarkAll": MenuUI.MarkAll(); msg = "多选数 = " + MenuUI.MarkCount; break;
+                        case "MarkClear": MenuUI.MarkClear(); msg = "多选数 = " + MenuUI.MarkCount; break;
+                        case "MarkCount": msg = "多选数 = " + MenuUI.MarkCount; break;
+                        case "BSet":
+                            msg = p.Length > 3 ? MenuUI.BatchSet(I(p[2]), p[3]) : "用法: ACTION|BSet|字段下标|值";
+                            break;
                         case "RowPlant":
                             msg = p.Length > 4 ? Actions.ActionPlayerPlant(I(p[2]), I(p[3]), I(p[4]))
                                                : "用法: ACTION|RowPlant|类型|列|行";
