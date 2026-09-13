@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using HarmonyLib;
@@ -25,6 +25,8 @@ namespace PvzRhCheat
 
         private static int _tab;
         private static readonly int[] _scroll = new int[6];
+        /// <summary>本帧从滚轮拿到的滚动量（正=向下），Frame() 里只取一次</summary>
+        private static int _wheel;
         private static readonly bool[] _groupOpen = GroupOpenDefault();
 
         /// <summary>默认**全部展开**：不然用户打开「功能开关」只看到 10 行组名，会以为开关没了。</summary>
@@ -228,6 +230,11 @@ namespace PvzRhCheat
                 int fs = 14;
                 try { fs = Mathf.Clamp(ModConfig.MenuFontSize.Value, 10, 26); } catch { }
                 UiSkin.SetFontSize(fs);
+
+                // 滚轮只取一次：压在面板上就吃掉（免得游戏画面跟着动），
+                // 再由当前页签决定用不用。原来是各页签自己调 Wheel()，
+                // 既没消费事件、又是"一格只滚一行"，下滑就会觉得又慢又怪。
+                _wheel = UiSkin.MouseOver(Panel) ? UiSkin.TakeWheel() : 0;
 
                 Fill(new Rect(Panel.x, Panel.y, Panel.width, Panel.height), UiSkin.ColBack);
                 UiSkin.Border(Panel, UiSkin.ColLine);
@@ -532,8 +539,8 @@ namespace PvzRhCheat
             if (_scroll[0] > total - visible) _scroll[0] = Mathf.Max(0, total - visible);
             if (_scroll[0] < 0) _scroll[0] = 0;
 
-            int w = UiSkin.Wheel();
-            if (w != 0 && UiSkin.MouseOver(cr)) _scroll[0] = Mathf.Clamp(_scroll[0] + w, 0, Mathf.Max(0, total - visible));
+            int w = _wheel;
+            if (w != 0 && UiSkin.MouseOver(cr)) { _scroll[0] = Mathf.Clamp(_scroll[0] + w, 0, Mathf.Max(0, total - visible)); _wheel = 0; }
 
             int k = -1;
             float y = cr.y;
@@ -556,7 +563,11 @@ namespace PvzRhCheat
                 for (int i = 0; i < keys.Length; i++)
                 {
                     k++;
-                    if (k < _scroll[0] || k >= _scroll[0] + visible) { if (k < _scroll[0] + visible) y += rh; continue; }
+                    // 窗口外的行：不画，**也绝对不要推进 y**。
+                    // 之前这里多写了个 if (k < _scroll[0] + visible) y += rh，
+                    // 于是"窗口上方"被跳过的行也会把 y 往下推，
+                    // 结果往下滚的时候可见行整体被顶到面板底下，看起来就是"UI 消失了一部分"。
+                    if (k < _scroll[0] || k >= _scroll[0] + visible) continue;
 
                     var entry = ModConfig.ByKey(keys[i]);
                     if (entry == null) { y += rh; continue; }
@@ -640,8 +651,8 @@ namespace PvzRhCheat
             int maxScroll = Mathf.Max(0, list.Count - vis);
             if (_scroll[1] > maxScroll) _scroll[1] = maxScroll;
             if (_scroll[1] < 0) _scroll[1] = 0;
-            int w = UiSkin.Wheel();
-            if (w != 0 && UiSkin.MouseOver(larea)) _scroll[1] = Mathf.Clamp(_scroll[1] + w, 0, maxScroll);
+            int w = _wheel;
+            if (w != 0 && UiSkin.MouseOver(larea)) { _scroll[1] = Mathf.Clamp(_scroll[1] + w, 0, maxScroll); _wheel = 0; }
 
             if (list.Count == 0)
             {
@@ -767,8 +778,7 @@ namespace PvzRhCheat
             int t = -1; try { t = (int)selP.thePlantType; } catch { }
             PlantDb.LoadRecipes(t);
             int recipes = PlantDb.RecipeCount;
-            int w = UiSkin.Wheel();
-            if (w != 0) _scroll[2] = Mathf.Max(0, _scroll[2] + w);
+            int w = _wheel;   // 只在这里用一次；下面按 listArea 是否被指到才真的滚
 
             float top = cr.y;
             string kind = PlantDb.KindOf(t);
@@ -794,7 +804,7 @@ namespace PvzRhCheat
             int vis = Mathf.Max(1, (int)((listArea.height - 24f) / rh));
             int maxScroll = Mathf.Max(0, recipes - vis);
             if (_scroll[2] > maxScroll) _scroll[2] = maxScroll;
-            if (w != 0 && UiSkin.MouseOver(listArea)) _scroll[2] = Mathf.Clamp(_scroll[2] + w, 0, maxScroll);
+            if (w != 0 && UiSkin.MouseOver(listArea)) { _scroll[2] = Mathf.Clamp(_scroll[2] + w, 0, maxScroll); _wheel = 0; }
 
             UiSkin.Text(new Rect(listArea.x + 6f, listArea.y + 2f, listArea.width - 12f, 20f),
                 "伙伴植物  →  当前融合结果      点「直接融合」= 让这株和该伙伴当场融合；点「改结果」= 改掉融合表里这条配方", UiSkin.Bold);
@@ -1193,8 +1203,8 @@ namespace PvzRhCheat
             if (_pickerPage >= pages) _pickerPage = pages - 1;
             if (_pickerPage < 0) _pickerPage = 0;
 
-            int w0 = UiSkin.Wheel();
-            if (w0 != 0 && UiSkin.MouseOver(p)) _pickerPage = Mathf.Clamp(_pickerPage + w0, 0, pages - 1);
+            int w0 = _wheel;
+            if (w0 != 0 && UiSkin.MouseOver(p)) { _pickerPage = Mathf.Clamp(_pickerPage + w0, 0, pages - 1); _wheel = 0; }
 
             float y = p.y + 60f;
             int start = _pickerPage * vis;

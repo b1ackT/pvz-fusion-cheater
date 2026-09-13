@@ -372,13 +372,40 @@ namespace PvzRhCheat
             return e != null && r.Contains(e.mousePosition);
         }
 
-        public static int Wheel()
+        /// <summary>
+        /// 取滚轮滚动量：**正数 = 向下滚（看下面的内容）**，负数 = 向上滚。
+        /// 会同时把事件吃掉（`Use()`）—— 否则游戏自己也收到同一个滚轮，
+        /// 表现为"菜单滚一下、游戏画面也跟着动"。
+        ///
+        /// 一格固定滚 3 行：不要用 `delta` 的绝对值去乘，
+        /// 不同鼠标/驱动一格给出的 delta 是 1 也可能是 3，乘出来会忽快忽慢。
+        /// </summary>
+        public static int TakeWheel()
         {
             Event e = Event.current;
             if (e == null || e.type != EventType.ScrollWheel) return 0;
             float d = e.delta.y;
+            e.Use();                                   // 吃掉，别让游戏也响应
             if (Math.Abs(d) < 0.01f) return 0;
-            return d > 0f ? 1 : -1;   // 向下滚 = 内容往下
+            return (d > 0f ? WheelSign : -WheelSign) * WheelStep;
+        }
+
+        /// <summary>一格滚轮滚几行</summary>
+        public const int WheelStep = 3;
+
+        /// <summary>
+        /// `Event.delta.y` 与实际"向下"的对应关系：+1 表示"delta 为正 = 向下滚"。
+        /// 原来就是这么写的、用户也没说方向不对，所以保持原样；
+        /// 哪天真反了只改这一个常量。
+        /// </summary>
+        public const int WheelSign = 1;
+
+        /// <summary>只读不消费（给需要"看一眼"的地方用）</summary>
+        public static int PeekWheelDir()
+        {
+            Event e = Event.current;
+            if (e == null || e.type != EventType.ScrollWheel) return 0;
+            return e.delta.y > 0f ? 1 : (e.delta.y < 0f ? -1 : 0);
         }
 
         public static string Fit(string s, int maxChars)
