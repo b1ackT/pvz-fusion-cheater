@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using HarmonyLib;
@@ -42,8 +42,14 @@ namespace PvzRhCheat
         private static Vector2 _dragOff;
 
         // 正在编辑的东西
-        private const int EK_NONE = 0, EK_PLANT = 1, EK_CONFIG = 2, EK_FILTER = 3, EK_SB = 4, EK_ZOMBIE = 5;
+        private const int EK_NONE = 0, EK_PLANT = 1, EK_CONFIG = 2, EK_FILTER = 3, EK_SB = 4, EK_ZOMBIE = 5, EK_SPEED = 6;
         private static int _editKind = EK_NONE;
+        /// <summary>
+        /// true = 输入框里是"预填的当前值"，用户**第一个字符就整段替换**。
+        /// 以前是预填后直接在后面追加，用户输入 5 就变成 55（他反馈的"输入会重复"就是这个）。
+        /// 按了退格就变成普通编辑（可以在原值上改）。
+        /// </summary>
+        private static bool _editFresh;
         private static int _editField = -1;
         private static string _editKey;
         private static long _editPtr;
@@ -181,7 +187,7 @@ namespace PvzRhCheat
             { "AutoKillZombies", "自动秒杀新出现的僵尸" },
             { "PlantWholeLine", "一种种一列（种一株铺满一整条）" },
             { "PlantLineDir", "铺满方向：col=一列(竖) / row=一排(横)" },
-            { "GameSpeed", "游戏速度倍率（= 游戏自己的 GameConfig.gameSpeed + Time.timeScale）" },
+            { "GameSpeed", "游戏速度倍率（点一次应用一次，不常驻锁定）" },
             { "StopZombieSpawn", "停止出怪（关卡不再放僵尸）" },
             { "ZombieInvincible", "僵尸无敌（僵尸不再掉血）" },
             { "ZombieHpMultiplier", "僵尸血量倍率" },
@@ -193,7 +199,7 @@ namespace PvzRhCheat
 
         /// <summary>构建时间戳（编译时生成），用来一眼确认跑的是哪一版</summary>
         internal static readonly string BuildStamp =
-            new DateTime(2026, 9, 13, 18, 30, 0, DateTimeKind.Local).ToString("yyyy-MM-dd HH:mm");
+            new DateTime(2026, 9, 13, 18, 45, 0, DateTimeKind.Local).ToString("yyyy-MM-dd HH:mm");
 
         // ---------------------------------------------------------------- 对外
         /// <summary>鼠标是否压在菜单上 —— 用来屏蔽游戏自己的鼠标操作</summary>
@@ -291,7 +297,7 @@ namespace PvzRhCheat
             Rect closeR = new Rect(t.xMax - 54f, t.y + 2f, 48f, 21f);
 
             UiSkin.Text(new Rect(t.x + 10f, t.y, espR.x - t.x - 16f, t.height),
-                        "PVZ 融合版 3.9 修改器   " + Plugin.Version + "（内置界面 · 6 页签）", UiSkin.Bold);
+                        "PVZ 融合版 3.9 修改器   " + Plugin.Version + "（内置界面 · 7 页签）", UiSkin.Bold);
 
             if (UiSkin.SmallButton(espR, esp ? "ESP: 开" : "ESP: 关", esp, true))
                 EspOverlay.ShowEsp = !esp;
@@ -341,7 +347,8 @@ namespace PvzRhCheat
             Fill(r, UiSkin.ColTitle);
             string s = _status;
             if (string.IsNullOrEmpty(s) || Time.realtimeSinceStartup - _statusAt > 8.0)
-                s = ModConfig.MenuKeyCode() + " 显示/隐藏   ·   " + ModConfig.EspKeyCode() + " 开关 ESP   ·   点植物上的方框选中它";
+                s = ModConfig.MenuKeyCode() + " 显示/隐藏   ·   " + ModConfig.EspKeyCode()
+                  + " 开关 ESP   ·   左键拖拽 = 框选植物/僵尸   ·   点方框 = 选中它";
             UiSkin.Text(new Rect(r.x + 8f, r.y, r.width * 0.58f, r.height), s, UiSkin.Left);
 
             string info = "关卡 " + Actions.LevelInfo()
@@ -404,23 +411,41 @@ namespace PvzRhCheat
             e.Use();
         }
 
+        /// <summary>
+        /// 上一次吃掉字符的帧号 / 键码：Unity 在有些配置下会把**同一个 KeyDown 事件
+        /// 派发两次**（多个 OnGUI 组件、Layout/Repaint 各来一遍都可能），
+        /// 表现就是"输入 5 变成 55"。同一帧里同一个键只收一次，跨帧不受影响。
+        /// </summary>
+        private static int _keyFrame = -1;
+        private static KeyCode _keyCode = KeyCode.None;
+
         private static void EditKey(Event e)
         {
             if (e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter) { CommitEdit(); e.Use(); return; }
             if (e.keyCode == KeyCode.Escape) { _editKind = EK_NONE; SetStatus("已取消编辑"); e.Use(); return; }
             if (e.keyCode == KeyCode.Backspace)
             {
+                // 退格 = 从"预填替换"切回"在原值上改"
+                _editFresh = false;
                 if (_editBuf.Length > 0) _editBuf = _editBuf.Substring(0, _editBuf.Length - 1);
                 e.Use();
                 return;
             }
             if (e.keyCode == KeyCode.Tab) { CommitEdit(); e.Use(); return; }
 
+            // 同一个键被派发两次 → 第二次直接丢弃
+            if (Time.frameCount == _keyFrame && e.keyCode == _keyCode)
+            {
+                Plugin.Log.LogInfo("[输入] 同一帧收到两次 " + e.keyCode + "，已忽略重复（frame=" + Time.frameCount + "）");
+                e.Use();
+                return;
+            }
+
             char c = e.character;
             if (c != '\0' && !char.IsControl(c))
             {
                 if (_editText || char.IsDigit(c) || c == '.' || c == '-' || c == ',')
-                    if (_editBuf.Length < 48) _editBuf += c;
+                    AppendChar(c, false);
                 e.Use();
                 return;
             }
@@ -428,10 +453,51 @@ namespace PvzRhCheat
             int d = -1;
             if (e.keyCode >= KeyCode.Alpha0 && e.keyCode <= KeyCode.Alpha9) d = e.keyCode - KeyCode.Alpha0;
             else if (e.keyCode >= KeyCode.Keypad0 && e.keyCode <= KeyCode.Keypad9) d = e.keyCode - KeyCode.Keypad0;
-            if (d >= 0) { if (_editBuf.Length < 48) _editBuf += (char)('0' + d); e.Use(); return; }
-            if (e.keyCode == KeyCode.Minus || e.keyCode == KeyCode.KeypadMinus) { _editBuf += '-'; e.Use(); return; }
-            if (e.keyCode == KeyCode.Period || e.keyCode == KeyCode.KeypadPeriod) { _editBuf += '.'; e.Use(); return; }
-            if (e.keyCode == KeyCode.Comma) { _editBuf += ','; e.Use(); return; }
+            if (d >= 0) { AppendChar((char)('0' + d), true); MarkKey(e); e.Use(); return; }
+            if (e.keyCode == KeyCode.Minus || e.keyCode == KeyCode.KeypadMinus) { AppendChar('-', true); MarkKey(e); e.Use(); return; }
+            if (e.keyCode == KeyCode.Period || e.keyCode == KeyCode.KeypadPeriod) { AppendChar('.', true); MarkKey(e); e.Use(); return; }
+            if (e.keyCode == KeyCode.Comma) { AppendChar(',', true); MarkKey(e); e.Use(); return; }
+        }
+
+        private static void MarkKey(Event e) { _keyFrame = Time.frameCount; _keyCode = e.keyCode; }
+
+        /// <summary>
+        /// 往输入缓冲里放一个字符。这里有个**实测出来的大坑**：
+        /// 这套构建里按一次数字键，IMGUI 会派发**两个** KeyDown 事件（同一帧）——
+        ///   ① keyCode=Alpha5, character=0      （keyCode 通道）
+        ///   ② keyCode=None,   character='5'    （字符通道）
+        /// 两个都追加就会变成"输入 5 得到 55"。所以同一个字符、来源不同、
+        /// 同一帧（或 0.12 秒内）出现的第二次，认作回声丢掉。
+        /// 连按同一个键（如 9999）不受影响：回声被丢后会把记录清空。
+        /// </summary>
+        private static void AppendChar(char c, bool fromKeyCode)
+        {
+            if (c == _lastChar && fromKeyCode != _lastFromKeyCode &&
+                (Time.frameCount == _keyFrame || Time.realtimeSinceStartup - _lastTime < 0.12f))
+            {
+                _lastChar = '\0';                    // 只丢一次，连按同一个键照旧
+                Plugin.Log.LogInfo("[输入] 已忽略重复的 '" + c + "'（同一按键被派发两次：keyCode 通道 + 字符通道）");
+                return;
+            }
+            if (_editFresh) { _editBuf = ""; _editFresh = false; }   // 预填值：第一个字符整段替换
+            if (_editBuf.Length < 48) _editBuf += c;
+            _lastChar = c;
+            _lastFromKeyCode = fromKeyCode;
+            _lastTime = Time.realtimeSinceStartup;
+            _keyFrame = Time.frameCount;
+        }
+
+        private static char _lastChar = '\0';
+        private static bool _lastFromKeyCode;
+        private static float _lastTime = -99f;
+
+        private static void BeginEditSpeed()
+        {
+            _editKind = EK_SPEED;
+            _editBuf = ModConfig.GameSpeed.Value.ToString("0.###", CultureInfo.InvariantCulture);
+            _editText = false;
+            _editFresh = true;
+            SetStatus("输入倍速（0.05 ~ 20），回车应用一次；输入即替换，退格可改");
         }
 
         private static void BeginEditPlant(Plant p, int fi)
@@ -443,7 +509,8 @@ namespace PvzRhCheat
             _editBuf = PlantDb.GetLive(p, fi) ?? "";
             if (_editBuf == "-1") _editBuf = "";
             _editText = PlantDb.FieldKind(fi) == PlantDb.KText;
-            SetStatus("正在编辑 " + PlantDb.FieldName(fi) + " —— 输入数值后回车确认，Esc 取消");
+            _editFresh = true;
+            SetStatus("正在编辑 " + PlantDb.FieldName(fi) + " —— 直接输入即替换原值，回车确认，Esc 取消");
         }
 
         private static void BeginEditConfig(string key)
@@ -454,7 +521,8 @@ namespace PvzRhCheat
             _editKey = key;
             _editBuf = ModConfig.GetString(e);
             _editText = e.SettingType == typeof(string);
-            SetStatus("正在编辑 " + key + " —— 回车确认，Esc 取消");
+            _editFresh = true;
+            SetStatus("正在编辑 " + key + " —— 直接输入即替换，回车确认，Esc 取消");
         }
 
         private static void CommitEdit()
@@ -470,6 +538,19 @@ namespace PvzRhCheat
             _editBuf = "";
 
             if (kind == EK_FILTER) { _pickerFilter = buf; _pickerPage = 0; return; }
+
+            if (kind == EK_SPEED)
+            {
+                float v;
+                if (!float.TryParse(buf, NumberStyles.Float, CultureInfo.InvariantCulture, out v))
+                { SetStatus("不是合法数字（例：2 / 1.5 / 0.75）"); return; }
+                if (v < 0.05f) v = 0.05f;
+                if (v > 20f) v = 20f;
+                ModConfig.GameSpeed.Value = v;
+                Actions.RequestGameSpeed(v);          // 应用一次，不常驻
+                SetStatus("游戏倍速 = " + v.ToString("0.###", CultureInfo.InvariantCulture) + "x（已应用一次）");
+                return;
+            }
 
             if (kind == EK_SB)
             {
@@ -509,6 +590,8 @@ namespace PvzRhCheat
                 var e = ModConfig.ByKey(key);
                 if (e == null) { SetStatus("配置项不存在"); return; }
                 ModConfig.SetFromString(e, buf);
+                // 倍速不是常驻项：改完配置还要"应用一次"才真的生效
+                if (key == "GameSpeed") Actions.RequestGameSpeed(ModConfig.GameSpeed.Value);
                 SetStatus(key + " = " + ModConfig.GetString(e));
                 return;
             }
@@ -756,8 +839,9 @@ namespace PvzRhCheat
             int nTargets = _multi.Count;
             if (selP == null && nTargets == 0)
             {
-                UiSkin.Text(new Rect(right.x + 10f, right.y + 10f, right.width - 20f, 130f),
-                    "没有选中植物。\n\n1) 点一下场上任意植物上方的方框\n2) 或在左边列表里点一只植物\n\n" +
+                UiSkin.Text(new Rect(right.x + 10f, right.y + 10f, right.width - 20f, 150f),
+                    "没有选中植物。\n\n1) 点一下场上任意植物上方的方框\n2) 或在左边列表里点一只植物\n" +
+                    "3) 或者直接在战场上**左键按住拖一个框**，框到的植物会一起进多选\n\n" +
                     "【批量修改】把左边列表每一行最左边的勾选框打上勾，\n" +
                     "就可以一次改好几株（勾选后右边所有改动都会应用到它们）。",
                     new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
@@ -865,7 +949,7 @@ namespace PvzRhCheat
 
         internal static int MarkCount { get { return _multi.Count; } }
 
-        private static bool IsMarked(Plant p)
+        internal static bool IsMarked(Plant p)
         {
             if (p == null) return false;
             try { return _multi.Contains(p.Pointer); } catch { return false; }
@@ -964,6 +1048,156 @@ namespace PvzRhCheat
             return res;
         }
 
+        /// <summary>
+        /// 左键框选：把屏幕上与框相交的植物/僵尸加入各自的多选集合。
+        /// 只加不减（手抖框到一片不会清掉已有勾选），返回一句给人看的结果。
+        /// </summary>
+        internal static string MarqueeSelect(Rect screen)
+        {
+            int addP = 0, hitP = 0, addZ = 0, hitZ = 0;
+
+            var plist = Actions.PlantsSnapshot();
+            for (int i = 0; i < plist.Count; i++)
+            {
+                Plant p = plist[i];
+                if (p == null) continue;
+                Rect pr;
+                if (!EspOverlay.TryPlantRect(p, out pr)) continue;
+                if (!pr.Overlaps(screen)) continue;
+                hitP++;
+                try { if (_multi.Add(p.Pointer)) addP++; } catch { }
+            }
+
+            var zlist = Actions.ZombiesSnapshot();
+            for (int i = 0; i < zlist.Count; i++)
+            {
+                Zombie z = zlist[i];
+                if (z == null) continue;
+                Rect zr;
+                if (!EspOverlay.TryZombieRect(z, out zr)) continue;
+                if (!zr.Overlaps(screen)) continue;
+                hitZ++;
+                try { if (_zmulti.Add(z.Pointer)) addZ++; } catch { }
+            }
+
+            if (hitP == 0 && hitZ == 0)
+                return "框选：这个框里没有框到植物/僵尸（框要大一点、而且要框到它们；" +
+                       "在菜单面板上拖是拖菜单，不会框选）";
+
+            return "框选：框到 植物 " + hitP + " 株 / 僵尸 " + hitZ + " 只，新加入 植物 +" + addP + " / 僵尸 +" + addZ
+                 + "　→　多选现在共 植物 " + _multi.Count + " 株 / 僵尸 " + _zmulti.Count + " 只";
+        }
+
+        // ---------------------------------------------------------------- 僵尸多选
+        private static readonly System.Collections.Generic.HashSet<IntPtr> _zmulti =
+            new System.Collections.Generic.HashSet<IntPtr>();
+
+        internal static int ZombieMarkCount { get { return _zmulti.Count; } }
+
+        internal static bool IsZombieMarked(Zombie z)
+        {
+            if (z == null) return false;
+            try { return _zmulti.Contains(z.Pointer); } catch { return false; }
+        }
+
+        private static void ToggleZombieMark(Zombie z)
+        {
+            if (z == null) return;
+            try
+            {
+                IntPtr k = z.Pointer;
+                if (!_zmulti.Remove(k)) _zmulti.Add(k);
+                SetStatus(_zmulti.Count > 0 ? ("已勾选 " + _zmulti.Count + " 只僵尸（改动会一次应用到它们）") : "已清空僵尸多选");
+            }
+            catch { }
+        }
+
+        internal static void ZombieMarkAll()
+        {
+            var list = Actions.ZombiesSnapshot();
+            for (int i = 0; i < list.Count; i++)
+            {
+                Zombie z = list[i];
+                if (z == null) continue;
+                try { _zmulti.Add(z.Pointer); } catch { }
+            }
+            SetStatus("已全选 " + _zmulti.Count + " 只僵尸");
+        }
+
+        internal static void ZombieInvertMark()
+        {
+            var list = Actions.ZombiesSnapshot();
+            for (int i = 0; i < list.Count; i++)
+            {
+                Zombie z = list[i];
+                if (z == null) continue;
+                try
+                {
+                    IntPtr k = z.Pointer;
+                    if (!_zmulti.Remove(k)) _zmulti.Add(k);
+                }
+                catch { }
+            }
+            SetStatus("反选后共 " + _zmulti.Count + " 只僵尸");
+        }
+
+        internal static void ZombieMarkClear() { _zmulti.Clear(); SetStatus("已清空僵尸多选"); }
+
+        /// <summary>把当前单选的僵尸加入/移出多选（IPC 自检用）</summary>
+        internal static void ZombieMarkToggleSelected() { ToggleZombieMark(Actions.SelectedZombie()); }
+
+        /// <summary>僵尸批量修改的目标：有勾选就用勾选的，否则用单选的那只</summary>
+        private static System.Collections.Generic.List<Zombie> ZombieEditTargets(Zombie selZ)
+        {
+            var res = new System.Collections.Generic.List<Zombie>();
+            var list = Actions.ZombiesSnapshot();
+            if (_zmulti.Count > 0)
+            {
+                var live = new System.Collections.Generic.HashSet<IntPtr>();
+                for (int i = 0; i < list.Count; i++)
+                {
+                    Zombie z = list[i];
+                    if (z == null) continue;
+                    try
+                    {
+                        IntPtr k = z.Pointer;
+                        live.Add(k);
+                        if (_zmulti.Contains(k)) res.Add(z);
+                    }
+                    catch { }
+                }
+                _zmulti.RemoveWhere(k => !live.Contains(k));
+            }
+            else if (selZ != null) res.Add(selZ);
+            return res;
+        }
+
+        /// <summary>把一个数值应用到当前所有目标僵尸（多选 = 全部勾选的，否则单选那只）</summary>
+        internal static string ZombieBatchSet(int fi, string buf)
+        {
+            var targets = ZombieEditTargets(Actions.SelectedZombie());
+            if (targets.Count == 0) return "没有目标僵尸（不在场上？）";
+            string err = null;
+            int ok = 0;
+            foreach (Zombie tz in targets)
+            {
+                string e = ZombieDb.SetValue(tz, fi, buf);
+                if (e == null) ok++; else if (err == null) err = e;
+            }
+            return err == null
+                ? ("已把 僵尸·" + ZombieDb.FieldName(fi) + " = " + buf + " 应用到 " + ok + " 只僵尸")
+                : ("僵尸·" + ZombieDb.FieldName(fi) + " 修改失败：" + err);
+        }
+
+        /// <summary>把一个行为开关应用到当前所有目标僵尸</summary>
+        internal static string ZombieBatchFlag(int fi, bool v)
+        {
+            var targets = ZombieEditTargets(Actions.SelectedZombie());
+            if (targets.Count == 0) return "没有目标僵尸（不在场上？）";
+            foreach (Zombie tz in targets) ZombieDb.SetFlag(tz, fi, v);
+            return ZombieDb.FlagName(fi) + " = " + v + "（" + targets.Count + " 只僵尸）";
+        }
+
         // ================================================================ 页 2 僵尸
         private static void TabZombies(Rect cr)
         {
@@ -1000,6 +1234,7 @@ namespace PvzRhCheat
                 Zombie z = list[i];
                 if (z == null) continue;
                 bool isSel = i == sel;
+                bool marked = IsZombieMarked(z);
                 Rect r = new Rect(larea.x, y, larea.width, rh);
                 string txt;
                 bool mind = false;
@@ -1008,49 +1243,92 @@ namespace PvzRhCheat
                 catch { txt = ZombieDb.Label(z); }
                 if (mind) txt = "★" + txt;
 
-                Fill(r, isSel ? new Color(0.16f, 0.34f, 0.24f, 1f)
-                              : mind ? new Color(0.10f, 0.24f, 0.26f, 1f) : UiSkin.ColBack);
-                if (isSel) Fill(new Rect(r.x, r.y, 4f, r.height), UiSkin.ColGreen);
-                else if (mind) Fill(new Rect(r.x, r.y, 4f, r.height), new Color(0.35f, 0.95f, 0.90f, 1f));
-                UiSkin.Text(new Rect(r.x + 9f, r.y, r.width - 12f, r.height), UiSkin.Fit(txt, 26),
+                // 行底色：多选打勾(蓝) > 单选(绿) > 魅惑(青) > 普通
+                Fill(r, marked ? new Color(0.16f, 0.26f, 0.40f, 1f)
+                              : isSel ? new Color(0.16f, 0.34f, 0.24f, 1f)
+                                      : mind ? new Color(0.10f, 0.24f, 0.26f, 1f) : UiSkin.ColBack);
+                Rect side = new Rect(r.x, r.y, 4f, r.height);
+                if (marked) Fill(side, new Color(0.45f, 0.72f, 1f, 1f));
+                else if (isSel) Fill(side, UiSkin.ColGreen);
+                else if (mind) Fill(side, new Color(0.35f, 0.95f, 0.90f, 1f));
+
+                // 多选勾选框（点它 = 加入/移出批量修改）
+                Rect cb = new Rect(r.x + 8f, r.y + (r.height - UiSkin.CheckSize) * 0.5f, UiSkin.CheckSize, UiSkin.CheckSize);
+                UiSkin.Checkbox(cb, marked);
+                UiSkin.Text(new Rect(cb.xMax + 5f, r.y, r.width - (cb.xMax - r.x) - 8f, r.height), UiSkin.Fit(txt, 21),
                     new UiSkin.TextOpt
                     {
                         Align = TextAnchor.MiddleLeft,
-                        Style = isSel ? FontStyle.Bold : FontStyle.Normal,
-                        Color = isSel ? UiSkin.ColGreen : UiSkin.ColText
+                        Style = (isSel || marked) ? FontStyle.Bold : FontStyle.Normal,
+                        Color = marked ? new Color(0.72f, 0.86f, 1f, 1f)
+                              : isSel ? UiSkin.ColGreen : UiSkin.ColText
                     });
-                if (UiSkin.Click(r, 0)) Actions.SelectZombie(z);
+                if (UiSkin.Click(cb, 0)) { ToggleZombieMark(z); }
+                else if (UiSkin.Click(r, 0)) Actions.SelectZombie(z);
                 y += rh;
             }
 
-            Rect clr = new Rect(left.x + 4f, left.yMax - 26f, left.width - 8f, 22f);
-            if (UiSkin.Button(clr, "取消选择", false, true)) Actions.SelectZombie(null);
+            // 多选工具条
+            float zbw3 = (left.width - 16f) / 3f;
+            Rect zm1 = new Rect(left.x + 4f, left.yMax - 50f, zbw3, 21f);
+            Rect zm2 = new Rect(left.x + 8f + zbw3, left.yMax - 50f, zbw3, 21f);
+            Rect zm3 = new Rect(left.x + 12f + zbw3 * 2f, left.yMax - 50f, zbw3, 21f);
+            if (UiSkin.Button(zm1, "全选", false, list.Count > 0)) ZombieMarkAll();
+            if (UiSkin.Button(zm2, "反选", false, list.Count > 0)) ZombieInvertMark();
+            if (UiSkin.Button(zm3, "清空多选", false, _zmulti.Count > 0)) ZombieMarkClear();
+            Rect zclr = new Rect(left.x + 4f, left.yMax - 26f, left.width - 8f, 22f);
+            if (UiSkin.Button(zclr, "取消单选（多选保留）", false, true)) Actions.SelectZombie(null);
 
             // ---------------- 右侧编辑器
             Fill(right, UiSkin.ColBack2);
             UiSkin.Border(right, UiSkin.ColLine);
 
-            if (selZ == null)
+            int zTargets = _zmulti.Count;
+            if (selZ == null && zTargets == 0)
             {
-                UiSkin.Text(new Rect(right.x + 10f, right.y + 10f, right.width - 20f, 120f),
-                    "没有选中僵尸。\n\n1) 点一下僵尸头上那个红色（或青色）的方框\n2) 或在左边列表里点一只\n\n选中后这里会显示它的全部数值，改多少就是多少。\n" +
+                UiSkin.Text(new Rect(right.x + 10f, right.y + 10f, right.width - 20f, 150f),
+                    "没有选中僵尸。\n\n1) 点一下僵尸头上那个红色（或青色）的方框\n2) 或在左边列表里点一只\n" +
+                    "3) 或者直接在战场上**左键按住拖一个框**，框到的僵尸会一起进多选\n\n" +
+                    "【批量修改】把左边列表每一行最左边的勾选框打上勾，\n" +
+                    "就可以一次改好几只（勾选后右边所有改动都会应用到它们）。\n" +
                     "★ = 已被魅惑（友军），方框是青色的。",
                     new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
                 return;
             }
 
             long zptr = 0L;
-            try { zptr = selZ.Pointer.ToInt64(); } catch { }
-            string kind = "";
-            try { kind = selZ.isMindControlled ? "  [友军/魅惑]" : "  [敌人]"; } catch { }
-            UiSkin.Text(new Rect(right.x + 8f, right.y + 3f, right.width - 16f, rh),
-                "已选中: " + ZombieDb.Label(selZ) + kind + "    指针 0x" + zptr.ToString("X"), UiSkin.Bold);
+            try { zptr = selZ == null ? 0L : selZ.Pointer.ToInt64(); } catch { }
+
+            // 多选时顶部显示醒目提示（批量改的是哪几只）
+            float topY = right.y + 3f;
+            if (zTargets > 0)
+            {
+                Rect banner = new Rect(right.x + 6f, right.y + 2f, right.width - 12f, rh);
+                Fill(banner, new Color(0.14f, 0.24f, 0.38f, 1f));
+                UiSkin.Border(banner, new Color(0.45f, 0.72f, 1f, 1f));
+                UiSkin.Text(new Rect(banner.x + 6f, banner.y, banner.width - 12f, banner.height),
+                    "★ 批量修改模式：已勾选 " + zTargets + " 只僵尸 —— 下面的改动会一次应用到这 " + zTargets + " 只",
+                    new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Bold, Color = new Color(0.80f, 0.90f, 1f, 1f) });
+                topY = banner.yMax + 2f;
+            }
+            else
+            {
+                string kind0 = "";
+                try { kind0 = selZ.isMindControlled ? "  [友军/魅惑]" : "  [敌人]"; } catch { }
+                UiSkin.Text(new Rect(right.x + 8f, topY, right.width - 16f, rh),
+                    "已选中: " + ZombieDb.Label(selZ) + kind0 + "    指针 0x" + zptr.ToString("X"), UiSkin.Bold);
+                topY += rh;
+            }
+
+            // 批量修改的目标（勾了就用勾的，没勾就用单选的）
+            var ztargets = ZombieEditTargets(selZ);
+            Zombie shownZ = selZ != null ? selZ : (ztargets.Count > 0 ? ztargets[0] : null);
 
             float colW = (right.width - 20f) / 2f;
-            float fy = right.y + rh + 4f;
+            float fy = topY + 4f;
             int n = ZombieDb.FieldCount;                  // 14 项 -> 7 行
             int rows = (n + 1) / 2;
-            float avail = right.height - rh - 4f - 22f * 3f - 6f;
+            float avail = right.height - (fy - right.y) - 22f * 3f - 8f;
             float cellH = Mathf.Clamp(avail / Mathf.Max(1, rows), 17f, rh);
 
             for (int fi = 0; fi < n; fi++)
@@ -1058,21 +1336,27 @@ namespace PvzRhCheat
                 int col = fi / rows, row = fi % rows;
                 Rect cell = new Rect(right.x + 6f + col * colW, fy + row * cellH, colW - 6f, cellH);
                 bool editing = _editKind == EK_ZOMBIE && _editField == fi && _editPtr == zptr;
-                string val = ZombieDb.GetLive(selZ, fi);
+                string val = shownZ == null ? "" : ZombieDb.GetLive(shownZ, fi);
                 if (!string.IsNullOrEmpty(ZombieDb.FieldUnit(fi))) val += ZombieDb.FieldUnit(fi);
-                bool ovr = ZombieDb.IsOverridden(selZ, fi);
+                bool ovr = shownZ != null && ZombieDb.IsOverridden(shownZ, fi);
 
                 bool reset;
                 if (ValueCell(cell, ZombieDb.FieldName(fi), val, ovr, editing, UiSkin.ColText, out reset))
                 {
-                    if (reset) { ZombieDb.ClearField(selZ, fi); SetStatus("已还原 " + ZombieDb.FieldName(fi)); }
-                    else BeginEditZombie(selZ, fi);
+                    if (reset)
+                    {
+                        int c2 = 0;
+                        foreach (Zombie tz in ztargets) { ZombieDb.ClearField(tz, fi); c2++; }
+                        SetStatus("已还原 " + c2 + " 只僵尸的 " + ZombieDb.FieldName(fi));
+                    }
+                    else BeginEditZombie(shownZ, fi);
                 }
             }
 
             // 行为开关
             float gy = fy + rows * cellH + 4f;
-            UiSkin.Text(new Rect(right.x + 8f, gy, right.width - 16f, 18f), "行为开关", UiSkin.Bold);
+            UiSkin.Text(new Rect(right.x + 8f, gy, right.width - 16f, 18f),
+                zTargets > 0 ? ("行为开关（应用到已勾选的 " + zTargets + " 只僵尸）") : "行为开关", UiSkin.Bold);
             gy += 19f;
             int fn = ZombieDb.FlagCount;
             float fw = (right.width - 20f) / 2f;
@@ -1080,21 +1364,31 @@ namespace PvzRhCheat
             {
                 int col = i / 2, row = i % 2;
                 Rect r = new Rect(right.x + 6f + col * fw, gy + row * 20f, fw - 6f, 19f);
-                bool v = ZombieDb.GetFlag(selZ, i);
+                bool v = shownZ != null && ZombieDb.GetFlag(shownZ, i);
                 Rect box = new Rect(r.x + 2f, r.y + (r.height - UiSkin.CheckSize) * 0.5f, UiSkin.CheckSize, UiSkin.CheckSize);
                 UiSkin.Checkbox(box, v);
                 UiSkin.Text(new Rect(box.xMax + 6f, r.y, r.width - 24f, r.height), ZombieDb.FlagName(i),
                     new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = v ? FontStyle.Bold : FontStyle.Normal, Color = UiSkin.ColText });
-                if (UiSkin.Click(r, 0)) { ZombieDb.SetFlag(selZ, i, !v); SetStatus(ZombieDb.FlagName(i) + " = " + (!v)); }
+                if (UiSkin.Click(r, 0)) SetStatus(ZombieBatchFlag(i, !v));
             }
 
+            bool single = zTargets == 0 && selZ != null;
             float by = right.yMax - 24f;
-            Rect b1 = new Rect(right.x + 6f, by, 132f, 21f);
-            Rect b2 = new Rect(right.x + 144f, by, 132f, 21f);
-            Rect b3 = new Rect(right.x + 282f, by, 132f, 21f);
-            if (UiSkin.Button(b1, "秒杀这只僵尸", false, true)) { try { selZ.Die(0); } catch { } SetStatus("已秒杀"); }
-            if (UiSkin.Button(b2, "还原它的全部修改", false, true)) { ZombieDb.ClearAll(selZ); SetStatus("已还原该僵尸的全部修改"); }
-            if (UiSkin.Button(b3, "换成别的僵尸…", false, true)) { OpenPicker(7, 0); }
+            Rect b1 = new Rect(right.x + 6f, by, 176f, 21f);
+            Rect b2 = new Rect(right.x + 188f, by, 176f, 21f);
+            Rect b3 = new Rect(right.x + 370f, by, 150f, 21f);
+            if (UiSkin.Button(b1, zTargets > 0 ? ("秒杀已勾选的 " + zTargets + " 只") : "秒杀这只僵尸", false, true))
+            {
+                int k = 0;
+                foreach (Zombie tz in ztargets) { try { tz.Die(0); k++; } catch { } }
+                SetStatus("已秒杀 " + k + " 只僵尸");
+            }
+            if (UiSkin.Button(b2, zTargets > 0 ? ("还原已勾选 " + zTargets + " 只的全部修改") : "还原它的全部修改", false, true))
+            {
+                foreach (Zombie tz in ztargets) ZombieDb.ClearAll(tz);
+                SetStatus("已还原 " + ztargets.Count + " 只僵尸的全部修改");
+            }
+            if (UiSkin.Button(b3, "换成别的僵尸…", false, single)) { OpenPicker(7, 0); }
         }
 
         private static void BeginEditZombie(Zombie z, int fi)
@@ -1105,7 +1399,8 @@ namespace PvzRhCheat
             try { _editPtr = z.Pointer.ToInt64(); } catch { }
             _editBuf = ZombieDb.GetLive(z, fi) ?? "";
             _editText = false;
-            SetStatus("正在编辑 僵尸·" + ZombieDb.FieldName(fi) + " —— 输入数值后回车确认，Esc 取消");
+            _editFresh = true;
+            SetStatus("正在编辑 僵尸·" + ZombieDb.FieldName(fi) + " —— 直接输入即替换原值，回车确认，Esc 取消");
         }
 
         // ================================================================ 页 3 融合
@@ -1323,7 +1618,7 @@ namespace PvzRhCheat
             UiSkin.Border(luBox, luEdit ? UiSkin.ColYellow : UiSkin.ColLine);
             UiSkin.Text(luBox, "阵容码: " + (luEdit ? _editBuf + "_" : (_lineup.Length == 0 ? "（点这里粘贴 PVZRH1;... 或先点导出）" : UiSkin.Fit(_lineup, 70))),
                 new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = luEdit ? UiSkin.ColYellow : UiSkin.ColText });
-            if (UiSkin.Click(luBox, 0)) { _editKind = EK_SB; _sbEdit = 99; _editBuf = _lineup; _editText = true; }
+            if (UiSkin.Click(luBox, 0)) { _editKind = EK_SB; _sbEdit = 99; _editBuf = _lineup; _editText = true; _editFresh = false; }
 
             float bw = (lu.width - 24f) / 3f;
             if (UiSkin.Button(new Rect(lu.x + 6f, lu.y + 52f, bw, 24f), "导出阵容码", false, true))
@@ -1365,6 +1660,7 @@ namespace PvzRhCheat
                 _sbEdit = field;
                 _editBuf = shown;
                 _editText = false;
+                _editFresh = true;
             }
         }
 
@@ -1426,40 +1722,80 @@ namespace PvzRhCheat
             }
             y += bh + 8f;
 
-            // 游戏自己的倍速档位（GameSpeedMgr.Gears）：直接点它给的档
-            UiSkin.Text(new Rect(x0, y, bw, 18f), "游戏倍速（游戏自己的档位 + 自定义）",
+            // 游戏自己的倍速档位（GameSpeedMgr.Gears）：**点一次应用一次**（不再常驻锁死）
+            UiSkin.Text(new Rect(x0, y, cr.width - 8f, 18f),
+                "游戏倍速（点一下 = 立刻应用一次；不会常驻锁定，之后游戏自己的倍速滑条照样能改）",
                 new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
             y += 19f;
             float gx = x0;
-            float gw = 58f;
+            float gw = 64f;
+            var gearList = new System.Collections.Generic.List<float>();
             try
             {
                 var gears = GameSpeedMgr.Gears;
                 if (gears != null)
-                {
-                    for (int i = 0; i < gears.Count && i < 6; i++)
-                    {
-                        float gv = gears[i];
-                        if (UiSkin.Button(new Rect(gx, y, gw, bh), gv.ToString("0.##") + "x", Math.Abs(ModConfig.GameSpeed.Value - gv) < 0.01f, true))
-                        { ModConfig.GameSpeed.Value = gv; SetStatus("游戏倍速 = " + gv.ToString("0.##") + "x"); }
-                        gx += gw + 6f;
-                    }
-                }
+                    for (int i = 0; i < gears.Count; i++) gearList.Add(gears[i]);
             }
             catch { }
-            if (UiSkin.Button(new Rect(gx, y, gw, bh), "0.5x", Math.Abs(ModConfig.GameSpeed.Value - 0.5f) < 0.01f, true))
-            { ModConfig.GameSpeed.Value = 0.5f; SetStatus("游戏倍速 = 0.5x"); }
-            gx += gw + 6f;
-            if (UiSkin.Button(new Rect(gx, y, gw, bh), "1x", Math.Abs(ModConfig.GameSpeed.Value - 1f) < 0.01f, true))
-            { ModConfig.GameSpeed.Value = 1f; SetStatus("游戏倍速 = 1x（恢复）"); }
-            gx += gw + 6f;
-            if (UiSkin.Button(new Rect(gx, y, 96f, bh), "速度诊断", false, true))
-                SetStatus(Actions.SpeedInfo());
-            y += bh + 8f;
+            if (gearList.Count == 0)
+                gearList.AddRange(new float[] { 0.1f, 0.2f, 0.5f, 0.75f, 1f, 1.5f, 2f, 3f });
+
+            float cur = Actions.CurrentSpeed();
+            for (int i = 0; i < gearList.Count; i++)
+            {
+                float gv = gearList[i];
+                string lab = gv.ToString("0.###") + "x";
+                bool on = Math.Abs(cur - gv) < 0.01f;
+                if (UiSkin.Button(new Rect(gx, y, gw, bh), lab, on, true))
+                {
+                    ModConfig.GameSpeed.Value = gv;
+                    Actions.RequestGameSpeed(gv);
+                    SetStatus("游戏倍速 = " + gv.ToString("0.###") + "x（已应用一次）");
+                }
+                gx += gw + 6f;
+            }
+            y += bh + 6f;
+
+            // 自定义数值：点框输入 → 回车应用（也可以直接点"应用"）
+            bool spdEdit = _editKind == EK_SPEED;
+            Rect spdBox = new Rect(x0, y, 150f, 24f);
+            Fill(spdBox, spdEdit ? UiSkin.ColEdit : new Color(0.12f, 0.13f, 0.16f, 1f));
+            UiSkin.Border(spdBox, spdEdit ? UiSkin.ColYellow : UiSkin.ColLine);
+            string spdTxt = spdEdit ? ("自定义: " + _editBuf + "_") : ("自定义: " + ModConfig.GameSpeed.Value.ToString("0.###") + "   ← 点这里输入");
+            UiSkin.Text(new Rect(spdBox.x + 6f, spdBox.y, spdBox.width - 10f, spdBox.height), UiSkin.Fit(spdTxt, 22),
+                new UiSkin.TextOpt
+                {
+                    Align = TextAnchor.MiddleLeft,
+                    Style = spdEdit ? FontStyle.Bold : FontStyle.Normal,
+                    Color = spdEdit ? UiSkin.ColYellow : UiSkin.ColText
+                });
+            if (UiSkin.Click(spdBox, 0)) BeginEditSpeed();
+
+            Rect spdApply = new Rect(spdBox.xMax + 6f, y, 96f, 24f);
+            if (UiSkin.Button(spdApply, "应用一次", spdEdit, true))
+            {
+                Actions.RequestGameSpeed(ModConfig.GameSpeed.Value);
+                SetStatus("游戏倍速 = " + ModConfig.GameSpeed.Value.ToString("0.###") + "x（已应用一次）");
+            }
+            Rect spdReset = new Rect(spdApply.xMax + 6f, y, 76f, 24f);
+            if (UiSkin.Button(spdReset, "恢复 1x", Math.Abs(cur - 1f) < 0.01f, true))
+            {
+                ModConfig.GameSpeed.Value = 1f;
+                Actions.RequestGameSpeed(1f);
+                SetStatus("游戏倍速已恢复 1x");
+            }
+            Rect spdDiag = new Rect(spdReset.xMax + 6f, y, 76f, 24f);
+            if (UiSkin.Button(spdDiag, "诊断", false, true)) SetStatus(Actions.SpeedInfo());
+            UiSkin.Text(new Rect(spdDiag.xMax + 8f, y, cr.width - (spdDiag.xMax - cr.x) - 14f, 24f),
+                "当前实际: " + cur.ToString("0.###") + "x",
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Bold, Color = UiSkin.ColYellow });
+            y += 30f;
 
             if (UiSkin.Button(new Rect(x0, y, bw, bh), "★ 一键关闭全部作弊", true, true))
             {
                 int n = ModConfig.ForceAllOff();
+                // 倍速不在每 tick 保持了，所以"全关"时要显式把速度也拉回 1x 应用一次
+                Actions.RequestGameSpeed(ModConfig.GameSpeed.Value);
                 SetStatus("已把 " + n + " 个作弊项恢复为关闭/中性值（立即生效，无需重启）");
             }
             if (UiSkin.Button(new Rect(x1, y, bw, bh), "只关总开关（Enabled）", false, true))
@@ -1526,6 +1862,16 @@ namespace PvzRhCheat
             y += rh;
             if (UiSkin.CheckRow(new Rect(cr.x + 4f, y, cr.width - 8f, rh), EspOverlay.ShowIndex, "方框里显示序号", "", true))
                 EspOverlay.ShowIndex = !EspOverlay.ShowIndex;
+            y += rh;
+            bool bs = true;
+            try { bs = ModConfig.BoxSelect.Value; } catch { }
+            if (UiSkin.CheckRow(new Rect(cr.x + 4f, y, cr.width - 8f, rh), bs,
+                    "左键拖拽框选（框到的植物/僵尸一起进多选）",
+                    bs ? "已开启" : "已关闭", UiSkin.MouseOver(new Rect(cr.x + 4f, y, cr.width - 8f, rh))))
+            {
+                try { ModConfig.BoxSelect.Value = !bs; } catch { }
+                SetStatus(!bs ? "已开启左键框选：在战场上按住左键拖一个框" : "已关闭左键框选（游戏恢复原样）");
+            }
             y += rh + 6f;
 
             UiSkin.Text(new Rect(cr.x + 4f, y, cr.width, 20f), "植物读数诊断（哪条读取路径通了）", UiSkin.Bold);
@@ -1567,8 +1913,10 @@ namespace PvzRhCheat
                 new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
             y += krh + 8f;
 
-            UiSkin.Text(new Rect(cr.x + 8f, y, cr.width - 16f, 76f),
-                "鼠标左键点 ESP 方框 —— 选中那株植物\n" +
+            UiSkin.Text(new Rect(cr.x + 8f, y, cr.width - 16f, 96f),
+                "鼠标左键点 ESP 方框 —— 选中那株植物 / 那只僵尸\n" +
+                "鼠标左键按住拖动 —— 框选：框到的植物/僵尸一起进多选（拖 8 像素以上才算）\n" +
+                "「植物」「僵尸」页里每行最左边的勾选框 = 多选，勾上后改动会一次应用到全部勾选的目标\n" +
                 "编辑数值时：回车确认，Esc 取消，退格删除\n" +
                 "鼠标压在菜单上时，游戏不会响应点击（不会误种植物）\n" +
                 "热键会写进配置文件，下次启动依然有效",
@@ -1627,6 +1975,7 @@ namespace PvzRhCheat
                 _editKind = EK_FILTER;
                 _editBuf = _pickerFilter;
                 _editText = true;
+                _editFresh = true;
             }
 
             var res = PlantDb.FilterTypes(_pickerFilter, _pickerZombie);
@@ -1717,10 +2066,11 @@ namespace PvzRhCheat
     /// <summary>
     /// 鼠标压在菜单上时，屏蔽游戏自己的鼠标处理（Mouse.Update 是它全部点击逻辑的入口）。
     /// 这样点菜单就不会同时在游戏里种植物、点卡片。
+    /// 另外：正在左键框选时也要屏蔽，否则拖框会在战场上误种植物。
     /// </summary>
     [HarmonyPatch(typeof(Mouse), "Update")]
     internal static class Patch_Mouse_Update
     {
-        private static bool Prefix() { return !MenuUI.BlocksGameInput(); }
+        private static bool Prefix() { return !MenuUI.BlocksGameInput() && !BoxSelect.Active; }
     }
 }

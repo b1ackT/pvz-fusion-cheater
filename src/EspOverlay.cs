@@ -30,10 +30,61 @@ namespace PvzRhCheat
                 Diag();
                 UiSkin.SetFontSize(Mathf.Clamp(ModConfig.EspFontSize.Value, 8, 48));
                 Keys();
+                // 框选要最先取事件（否则会被下面的方框点击消费掉）
+                BoxSelect.Frame();
                 if (ShowEsp) DrawEsp();
                 if (ModConfig.ZombieEsp.Value) DrawZombieEsp();
+                BoxSelect.Draw();
             }
             catch (Exception e) { Plugin.LogOnce("ESP", e); }
+        }
+
+        // ---------------------------------------------------------------- 屏幕矩形
+        /// <summary>
+        /// 一株植物 ESP 方框的屏幕矩形（框选/命中判定共用同一套算法，
+        /// 保证"框到哪儿就选中哪儿"，不会跟画出来的框对不上）。
+        /// </summary>
+        internal static bool TryPlantRect(Plant p, out Rect r)
+        {
+            r = new Rect(0f, 0f, 0f, 0f);
+            if (p == null) return false;
+            Transform tr;
+            try { tr = p.transform; } catch { return false; }
+            return TryRect(tr, EspHeight, out r);
+        }
+
+        /// <summary>一只僵尸 ESP 方框的屏幕矩形</summary>
+        internal static bool TryZombieRect(Zombie z, out Rect r)
+        {
+            r = new Rect(0f, 0f, 0f, 0f);
+            if (z == null) return false;
+            Transform tr;
+            try { tr = z.transform; } catch { return false; }
+            float h = 1.1f;
+            try { h = ModConfig.ZombieEspHeight.Value; } catch { }
+            return TryRect(tr, h, out r);
+        }
+
+        private static bool TryRect(Transform tr, float height, out Rect r)
+        {
+            r = new Rect(0f, 0f, 0f, 0f);
+            Camera cam = Camera.main;
+            if (cam == null || tr == null) return false;
+            try
+            {
+                Vector3 wp = tr.position;
+                wp.y += height;
+                Vector3 sp = cam.WorldToScreenPoint(wp);
+                if (sp.z < 0f) return false;
+                float x = sp.x, sy = Screen.height - sp.y;
+                if (x < -400f || x > Screen.width + 400f || sy < -400f || sy > Screen.height + 400f) return false;
+                int fs = UiSkin.FontSize > 0 ? UiSkin.FontSize : 18;
+                float h = fs + 12f;
+                r = new Rect(Mathf.Round(x - EspWidth * 0.5f), Mathf.Round(sy - h * 0.5f),
+                             Mathf.Round(EspWidth), Mathf.Round(h));
+                return true;
+            }
+            catch { return false; }
         }
 
         /// <summary>默认皮肤在这套构建里没有字体（font == NULL），不补的话文字全是空白</summary>
@@ -55,34 +106,27 @@ namespace PvzRhCheat
 
         private void DrawEsp()
         {
-            Camera cam = Camera.main;
-            if (cam == null) return;
             var arr = Actions.PlantsSnapshot();
             if (arr == null || arr.Count == 0) return;
-
-            int fs = UiSkin.FontSize > 0 ? UiSkin.FontSize : 18;
-            float h = fs + 12f;
 
             for (int i = 0; i < arr.Count; i++)
             {
                 Plant p = arr[i];
                 if (p == null) continue;
 
-                Vector3 wp;
-                try { wp = p.transform.position; } catch { continue; }
-                wp.y += EspHeight;
-
-                Vector3 sp = cam.WorldToScreenPoint(wp);
-                if (sp.z < 0f) continue;
-                float x = sp.x, sy = Screen.height - sp.y;
-                if (x < -400f || x > Screen.width + 400f || sy < -400f || sy > Screen.height + 400f) continue;
+                Rect rect;
+                if (!TryPlantRect(p, out rect)) continue;
 
                 bool sel = Actions.IsSelected(p);
-                var rect = new Rect(Mathf.Round(x - EspWidth * 0.5f), Mathf.Round(sy - h * 0.5f),
-                                    Mathf.Round(EspWidth), Mathf.Round(h));
-                Fill(rect, sel ? new Color(0.62f, 0.12f, 0.12f, 0.95f) : new Color(0.04f, 0.05f, 0.07f, 0.92f));
+                bool marked = MenuUI.IsMarked(p);
+
+                // 多选打勾(蓝) > 单选(红) > 普通(深灰)
+                Fill(rect, marked ? new Color(0.08f, 0.16f, 0.34f, 0.95f)
+                            : sel ? new Color(0.62f, 0.12f, 0.12f, 0.95f)
+                                  : new Color(0.04f, 0.05f, 0.07f, 0.92f));
                 Fill(new Rect(rect.x, rect.y, rect.width, 3f),
-                     sel ? new Color(1f, 0.35f, 0.35f, 1f) : new Color(0.20f, 0.85f, 0.45f, 1f));
+                     marked ? new Color(0.45f, 0.72f, 1f, 1f)
+                          : sel ? new Color(1f, 0.35f, 0.35f, 1f) : new Color(0.20f, 0.85f, 0.45f, 1f));
 
                 string s = "";
                 try
@@ -120,43 +164,32 @@ namespace PvzRhCheat
         /// <summary>僵尸 ESP：和植物一样的方框，敌我颜色区分，点一下选中它</summary>
         private void DrawZombieEsp()
         {
-            Camera cam = Camera.main;
-            if (cam == null) return;
             var arr = Actions.ZombiesSnapshot();
             if (arr == null || arr.Count == 0) return;
-
-            int fs = UiSkin.FontSize > 0 ? UiSkin.FontSize : 18;
-            float h = fs + 12f;
-            float height = ModConfig.ZombieEspHeight.Value;
 
             for (int i = 0; i < arr.Count; i++)
             {
                 Zombie z = arr[i];
                 if (z == null) continue;
 
-                Vector3 wp;
-                try { wp = z.transform.position; } catch { continue; }
-                wp.y += height;
-
-                Vector3 sp = cam.WorldToScreenPoint(wp);
-                if (sp.z < 0f) continue;
-                float x = sp.x, sy = Screen.height - sp.y;
-                if (x < -400f || x > Screen.width + 400f || sy < -400f || sy > Screen.height + 400f) continue;
+                Rect rect;
+                if (!TryZombieRect(z, out rect)) continue;
 
                 bool sel = Actions.IsZombieSelected(z);
+                bool marked = MenuUI.IsZombieMarked(z);
                 bool mind = false;
                 try { mind = z.isMindControlled; } catch { }
 
-                // 颜色：被魅惑（友军）= 青绿，普通敌人 = 红，选中 = 亮黄
-                Color fill = sel ? new Color(0.55f, 0.45f, 0.05f, 0.95f)
+                // 颜色：多选(蓝) > 选中(亮黄) > 被魅惑友军(青绿) > 普通敌人(红)
+                Color fill = marked ? new Color(0.08f, 0.16f, 0.34f, 0.95f)
+                           : sel ? new Color(0.55f, 0.45f, 0.05f, 0.95f)
                            : mind ? new Color(0.05f, 0.32f, 0.34f, 0.92f)
                                   : new Color(0.34f, 0.06f, 0.08f, 0.92f);
-                Color top = sel ? new Color(1f, 0.85f, 0.35f, 1f)
+                Color top = marked ? new Color(0.45f, 0.72f, 1f, 1f)
+                          : sel ? new Color(1f, 0.85f, 0.35f, 1f)
                           : mind ? new Color(0.35f, 0.95f, 0.90f, 1f)
                                  : new Color(1f, 0.45f, 0.45f, 1f);
 
-                var rect = new Rect(Mathf.Round(x - EspWidth * 0.5f), Mathf.Round(sy - h * 0.5f),
-                                    Mathf.Round(EspWidth), Mathf.Round(h));
                 Fill(rect, fill);
                 Fill(new Rect(rect.x, rect.y, rect.width, 3f), top);
 

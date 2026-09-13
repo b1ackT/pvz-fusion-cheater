@@ -37,9 +37,11 @@ namespace PvzRhCheat
 
             // 界面上点的"直接融合"在这里执行：不在 IMGUI 事件里动场景对象
             try { RunPendingFuse(); } catch (Exception e) { LogSlow("FastTick/融合", e); }
-            // 批量变身 / 游戏速度（每帧都要保持，不走 0.25 秒的节流）
+            // 批量变身
             try { RunPendingChangeAll(); } catch (Exception e) { LogSlow("FastTick/批量变身", e); }
-            try { GameSpeedTweak(); } catch (Exception e) { LogSlow("FastTick/速度", e); }
+            // 游戏速度：**只消费一次请求**，不再每帧把 timeScale 按回去。
+            // 之前每 tick 都写 = 用户点一次就被永久锁死，连游戏自己的倍速滑条都改不动。
+            try { RunPendingSpeed(); } catch (Exception e) { LogSlow("FastTick/速度", e); }
             // 卡片/工具无冷却：0.25 秒刷一次，别等 2 秒的施加周期（会看到冷却条回涨）
             try { FastCardTweak(); } catch (Exception e) { LogSlow("FastTick/卡片", e); }
             // 融合会换掉植物对象，重新读一次列表
@@ -620,10 +622,16 @@ namespace PvzRhCheat
             try { if (ModConfig.AutoCollectSun.Value) TreasureData.autoCollect = true; }
             catch (Exception e) { LogSlow("cheat/autoCollect", e); }
 
-            if (ModConfig.FreezeAllZombies.Value) ForEachZombie(FreezeOne);
+            bool freeze = ModConfig.FreezeAllZombies.Value;
+            if (freeze) ForEachZombie(FreezeOne);
+            else if (_freezeWasOn) ForEachZombie(z => { try { ZombieDb.Thaw(z); } catch { } });   // 关掉时解冻
+            _freezeWasOn = freeze;
+
             if (ModConfig.ZombiesStopMoving.Value) ForEachZombie(StopOne);
             if (ModConfig.AutoKillZombies.Value) ForEachZombie(KillOne);
         }
+
+        private static bool _freezeWasOn;
 
         /// <summary>用非泛型 FindObjectsOfType，避免泛型实例化被裁剪时静默返回空</summary>
         internal static Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<UnityEngine.Object>
@@ -662,7 +670,7 @@ namespace PvzRhCheat
             return n;
         }
 
-        private static void FreezeOne(Zombie z) { try { z.SetFreeze(30f, 3); } catch { } }
+        private static void FreezeOne(Zombie z) { try { ZombieDb.Freeze(z); } catch { } }
         private static void StopOne(Zombie z) { try { z.theSpeed = 0f; } catch { } }
         private static void KillOne(Zombie z) { try { z.Die(0); } catch { } }
 
@@ -1038,33 +1046,62 @@ namespace PvzRhCheat
 
         // ================================================================== 对齐 Modified-Plus 的额外功能
         /// <summary>
-        /// 游戏速度。
+        /// 游戏速度 —— **按一次应用一次，不常驻**。
         ///
         /// 游戏自己有一个 `GameSpeedMgr`（暂停菜单里的倍速滑条）+ `GameConfig.gameSpeed`
         /// + `GameSpeedMgr.Gears`（它自己的档位表）。所以严格来说游戏侧"有"这个功能，
         /// 只是没有公开的"设置倍速"方法 —— 它就是把 `GameConfig.gameSpeed` 应用到 `Time.timeScale`。
         ///
-        /// 这里两个都写：
+        /// 两个都写：
         ///   · `Time.timeScale`  —— 真正生效的地方
-        ///   · `GameAPP.config.gameSpeed` —— 让游戏自己的滑条/文字也同步，
-        ///     并且**防止游戏的 GameSpeedMgr.Update() 用旧值把 timeScale 覆盖回去**
+        ///   · `GameAPP.config.gameSpeed` —— 让游戏自己的滑条/文字也同步
+        ///
+        /// 踩过的坑：以前是在 FastTick 里**每个 tick 都写一遍**，结果
+        /// "点一次就再也改不回来"（用户原话：循环锁死）—— 游戏自己的倍速滑条、
+        /// 甚至暂停菜单都被这段代码按回去了。现在改成：
+        ///   RequestGameSpeed(v)  只登记一个"待应用"的值（可以从任意线程调）
+        ///   RunPendingSpeed()    在主循环里消费一次，应用后立刻清空
+        /// 也就是说，之后游戏想怎么改速度都随它，我们不再插手。
         /// </summary>
-        internal static void GameSpeedTweak()
+        internal static void ApplyGameSpeed(float want)
         {
-            float want = 1f;
-            try { want = ModConfig.GameSpeed.Value; } catch { }
             if (want < 0.05f) want = 0.05f;
             if (want > 20f) want = 20f;
 
-            // 同步游戏自己的配置项（它的滑条就是改这个）
             try
             {
                 GameConfig cfg = GameAPP.config;
-                if (cfg != null && Math.Abs(cfg.gameSpeed - want) > 0.001f) cfg.gameSpeed = want;
+                if (cfg != null) cfg.gameSpeed = want;
             }
             catch (Exception e) { LogSlow("speed/gameConfig", e); }
 
-            try { if (Math.Abs(Time.timeScale - want) > 0.001f) Time.timeScale = want; } catch { }
+            try { Time.timeScale = want; } catch (Exception e) { LogSlow("speed/timeScale", e); }
+        }
+
+        private static float _pendSpeed = -1f;   // < 0 = 没有待应用的请求
+
+        /// <summary>登记一次"把游戏速度设成 want"（IPC 线程 / IMGUI 都能调）</summary>
+        internal static void RequestGameSpeed(float want)
+        {
+            if (want < 0.05f) want = 0.05f;
+            if (want > 20f) want = 20f;
+            _pendSpeed = want;
+        }
+
+        /// <summary>主循环里消费速度请求：应用一次就拉倒</summary>
+        internal static void RunPendingSpeed()
+        {
+            float v = _pendSpeed;
+            if (v < 0f) return;
+            _pendSpeed = -1f;
+            ApplyGameSpeed(v);
+            Plugin.Log.LogInfo("[速度] 已应用一次：" + v.ToString("0.###") + "x（不再常驻锁定，之后游戏自己也能改）");
+        }
+
+        /// <summary>当前实际速度（给界面显示用）</summary>
+        internal static float CurrentSpeed()
+        {
+            try { return Time.timeScale; } catch { return 1f; }
         }
 
         /// <summary>诊断：游戏侧和 Unity 侧的速度各是多少、游戏自己的档位有哪些</summary>

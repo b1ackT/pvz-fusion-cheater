@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using BepInEx.Configuration;
@@ -123,6 +123,8 @@ namespace PvzRhCheat
         // ---- 热键 ----
         public static ConfigEntry<string> MenuKey;            // 显示/隐藏菜单，默认 F1
         public static ConfigEntry<string> EspKey;             // 开关 ESP 方框，默认 F3
+        /// <summary>左键拖拽框选（把框到的植物/僵尸加入多选）——界面辅助，不算作弊项</summary>
+        public static ConfigEntry<bool>   BoxSelect;
 
         /// <summary>配置结构版本：低于当前值时把"作弊项"强制拉回全关（见 Init 里的迁移）</summary>
         public static ConfigEntry<int>    ConfigVersion;
@@ -210,6 +212,9 @@ namespace PvzRhCheat
                 "Key that shows/hides the in-game menu (Unity KeyCode name, e.g. F1, Insert, F8, BackQuote)"), "MenuKey");
             EspKey  = Reg(cfg.Bind("A-Hotkey", "EspKey", "F3",
                 "Key that toggles the plant ESP boxes"), "EspKey");
+            BoxSelect = Reg(cfg.Bind("A-Hotkey", "BoxSelect", true,
+                "Hold left mouse button and drag on the lawn to box-select plants/zombies " +
+                "(adds them to the multi-select list). UI helper, does not change the game by itself"), "BoxSelect");
 
             ConfigVersion = Reg(cfg.Bind("A-Hotkey", "ConfigVersion", 0,
                 "Internal: config layout version, used for one-time resets"), "ConfigVersion");

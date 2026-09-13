@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
@@ -169,6 +169,8 @@ namespace PvzRhCheat
                         if (e == null) { Plugin.Log.LogWarning("[IPC] 未知配置 " + p[1]); return; }
                         ModConfig.SetFromString(e, p[2]);
                         if (p[1] == "BuffWhitelist" || p[1] == "UltiBuffWhitelist") Actions.InvalidateBuffCache();
+                        // 速度不是常驻开关：配置只是"上次用的值"，真要生效得请求应用一次
+                        if (p[1] == "GameSpeed") Actions.RequestGameSpeed(F(p[2]));
                     }
                     return;
 
@@ -235,7 +237,7 @@ namespace PvzRhCheat
                             if (p.Length > 2) { Actions.SelectZombie(Actions.ZombieByPtr(L(p[2]))); msg = "选中僵尸 " + p[2]; }
                             else msg = "缺少指针";
                             break;
-                        case "ZFreeze": { Zombie z = Actions.SelectedZombie(); if (z == null) msg = "没有选中僵尸"; else { z.SetFreeze(30f, 3); msg = "已冻结"; } } break;
+                        case "ZFreeze": { Zombie z = Actions.SelectedZombie(); if (z == null) msg = "没有选中僵尸"; else { ZombieDb.Freeze(z); msg = "已冻结 冻结等级=" + z.freezeLevel; } } break;
                         case "ZKill": { Zombie z = Actions.SelectedZombie(); if (z == null) msg = "没有选中僵尸"; else { z.Die(0); msg = "已秒杀"; } } break;
                         case "ZMind":
                             {
@@ -278,12 +280,41 @@ namespace PvzRhCheat
                         case "BSet":
                             msg = p.Length > 3 ? MenuUI.BatchSet(I(p[2]), p[3]) : "用法: ACTION|BSet|字段下标|值";
                             break;
+                        case "ZMark": MenuUI.ZombieMarkToggleSelected(); msg = "僵尸多选数 = " + MenuUI.ZombieMarkCount; break;
+                        case "ZMarkAll": MenuUI.ZombieMarkAll(); msg = "僵尸多选数 = " + MenuUI.ZombieMarkCount; break;
+                        case "ZMarkClear": MenuUI.ZombieMarkClear(); msg = "僵尸多选数 = " + MenuUI.ZombieMarkCount; break;
+                        case "ZMarkCount": msg = "僵尸多选数 = " + MenuUI.ZombieMarkCount; break;
+                        case "ZBSet":
+                            msg = p.Length > 3 ? MenuUI.ZombieBatchSet(I(p[2]), p[3]) : "用法: ACTION|ZBSet|字段下标|值";
+                            break;
+                        case "ZFlag":
+                            msg = p.Length > 3 ? MenuUI.ZombieBatchFlag(I(p[2]), p[3] == "1" || p[3] == "true")
+                                               : "用法: ACTION|ZFlag|开关下标|1或0";
+                            break;
+                        case "BoxSelect":
+                            if (p.Length > 2) { ModConfig.BoxSelect.Value = p[2] == "1" || p[2] == "true"; msg = "左键框选 = " + ModConfig.BoxSelect.Value; }
+                            else msg = "左键框选 = " + ModConfig.BoxSelect.Value;
+                            break;
+                        case "BoxSel":
+                            {
+                                // 自检用：直接给一个屏幕矩形走一遍框选逻辑，返回选中结果
+                                if (p.Length < 6) { msg = "用法: ACTION|BoxSel|x|y|w|h"; break; }
+                                msg = MenuUI.MarqueeSelect(new UnityEngine.Rect(F(p[2]), F(p[3]), F(p[4]), F(p[5])));
+                                Plugin.Log.LogInfo("[框选] " + msg);
+                            }
+                            break;
                         case "RowPlant":
                             msg = p.Length > 4 ? Actions.ActionPlayerPlant(I(p[2]), I(p[3]), I(p[4]))
                                                : "用法: ACTION|RowPlant|类型|列|行";
                             break;
                         case "Speed":
-                            if (p.Length > 2) { ModConfig.GameSpeed.Value = F(p[2]); msg = "游戏速度 = " + ModConfig.GameSpeed.Value; }
+                            if (p.Length > 2)
+                            {
+                                float sv = F(p[2]);
+                                ModConfig.GameSpeed.Value = sv;
+                                Actions.RequestGameSpeed(sv);      // 主循环里应用一次
+                                msg = "游戏速度已请求 = " + sv.ToString("0.###") + "（应用一次，不常驻）";
+                            }
                             else msg = "缺少倍率";
                             break;
                         case "Fuse":
@@ -453,6 +484,8 @@ namespace PvzRhCheat
             sb.Append(",\"count\":").Append(Actions.PlantsSnapshot().Count);
             sb.Append(",\"zcount\":").Append(Actions.ZombiesSnapshot().Count);
             sb.Append(",\"zselPtr\":").Append(Actions.ZombieSelPtr());
+            sb.Append(",\"mark\":").Append(MenuUI.MarkCount);
+            sb.Append(",\"zmark\":").Append(MenuUI.ZombieMarkCount);
             sb.Append(",\"zombies\":").Append(ZombiesJson());
             sb.Append(",\"srcLawnf\":").Append(Actions.SrcLawnf());
             sb.Append(",\"srcBoard\":").Append(Actions.SrcBoard());
@@ -511,6 +544,7 @@ namespace PvzRhCheat
                   .Append(",\"lv\":").Append(lv).Append(",\"skin\":").Append(skin)
                   .Append(",\"row\":").Append(row).Append(",\"col\":").Append(col)
                   .Append(",\"sel\":").Append(Actions.IsSelected(p) ? 1 : 0)
+                  .Append(",\"mk\":").Append(MenuUI.IsMarked(p) ? 1 : 0)
                   .Append(",\"live\":").Append(Live(p))
                   .Append(",\"ov\":").Append(Ov(Overrides.Get(p)));
 
@@ -556,6 +590,7 @@ namespace PvzRhCheat
                   .Append(",\"row\":").Append(row)
                   .Append(",\"mind\":").Append(mind ? 1 : 0)
                   .Append(",\"sel\":").Append(Actions.IsZombieSelected(z) ? 1 : 0)
+                  .Append(",\"mk\":").Append(MenuUI.IsZombieMarked(z) ? 1 : 0)
                   .Append('}');
             }
             sb.Append(']');
