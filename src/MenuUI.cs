@@ -24,7 +24,7 @@ namespace PvzRhCheat
         internal static Rect Panel;
 
         private static int _tab;
-        private static readonly int[] _scroll = new int[5];
+        private static readonly int[] _scroll = new int[6];
         private static readonly bool[] _groupOpen = new bool[16];
         private static readonly List<int> _filtered = new List<int>(800);
 
@@ -32,7 +32,7 @@ namespace PvzRhCheat
         private static Vector2 _dragOff;
 
         // 正在编辑的东西
-        private const int EK_NONE = 0, EK_PLANT = 1, EK_CONFIG = 2, EK_FILTER = 3;
+        private const int EK_NONE = 0, EK_PLANT = 1, EK_CONFIG = 2, EK_FILTER = 3, EK_SB = 4;
         private static int _editKind = EK_NONE;
         private static int _editField = -1;
         private static string _editKey;
@@ -50,6 +50,56 @@ namespace PvzRhCheat
         private static int _recipePartner = -1, _recipeResult = -1;
         /// <summary>true = 选完结果后立刻把配方写进游戏融合表（「改结果…」那条路）</summary>
         private static bool _pickerCommit;
+        /// <summary>类型选择器当前是否在选僵尸（僵尸用 ZombieType 枚举）</summary>
+        private static bool _pickerZombie;
+
+        // ---------------------------------------------------------------- 沙盒状态
+        private const int SB_PTYPE = 0, SB_COL = 1, SB_ROW = 2,
+                          SB_ZTYPE = 3, SB_ZROW = 4, SB_ZX = 5, SB_ZMIND = 6,
+                          SB_MROW = 7, SB_MTYPE = 8,
+                          SB_CPTYPE = 9, SB_CZTYPE = 10;
+
+        private static int _sbPType = 0, _sbCol = 4, _sbRow = 2;
+        private static int _sbZType = 0, _sbZRow = 2;
+        private static float _sbZX = 9.9f;
+        private static bool _sbZMind;
+        private static int _sbMRow = 2, _sbMType = 0;
+        private static int _sbCPType = 0, _sbCZType = 0;
+        private static string _lineup = "";
+        private static int _sbEdit;            // 正在编辑哪个沙盒数值
+
+        private static int SbGetInt(int f)
+        {
+            switch (f)
+            {
+                case SB_PTYPE: return _sbPType;
+                case SB_COL: return _sbCol;
+                case SB_ROW: return _sbRow;
+                case SB_ZTYPE: return _sbZType;
+                case SB_ZROW: return _sbZRow;
+                case SB_MROW: return _sbMRow;
+                case SB_MTYPE: return _sbMType;
+                case SB_CPTYPE: return _sbCPType;
+                case SB_CZTYPE: return _sbCZType;
+            }
+            return 0;
+        }
+
+        private static void SbSetInt(int f, int v)
+        {
+            switch (f)
+            {
+                case SB_PTYPE: _sbPType = v; break;
+                case SB_COL: _sbCol = Mathf.Clamp(v, 0, 8); break;
+                case SB_ROW: _sbRow = Mathf.Clamp(v, 0, 6); break;
+                case SB_ZTYPE: _sbZType = v; break;
+                case SB_ZROW: _sbZRow = Mathf.Clamp(v, 0, 6); break;
+                case SB_MROW: _sbMRow = Mathf.Clamp(v, 0, 6); break;
+                case SB_MTYPE: _sbMType = Mathf.Clamp(v, 0, 4); break;
+                case SB_CPTYPE: _sbCPType = v; break;
+                case SB_CZTYPE: _sbCZType = v; break;
+            }
+        }
 
         private static string _status = "";
         private static double _statusAt;
@@ -59,25 +109,27 @@ namespace PvzRhCheat
         // ---------------------------------------------------------------- 配置分组
         private static readonly string[] GroupNames =
         {
-            "通用", "解锁与资源", "关卡内", "战斗", "旅行 / 词条", "天赋", "深渊抽奖券", "经典作弊", "界面与 ESP",
+            "通用", "解锁与资源", "关卡内", "战斗", "旅行 / 词条", "天赋", "深渊抽奖券",
+            "经典作弊", "速度 · 僵尸 · 工具", "界面与 ESP",
         };
 
         private static readonly string[] GroupHints =
         {
             "总开关、重刷间隔", "关卡·图鉴·金币", "阳光不减", "无敌 / 伤害倍率", "Roguelike 词条池", "冒险天赋树",
-            "抽奖券", "原版经典功能", "字号、外置窗口",
+            "抽奖券", "原版经典功能", "倍速 / 出怪 / 冷却", "字号、外置窗口",
         };
 
         private static readonly string[][] GroupKeys =
         {
             new[] { "Enabled", "ApplyIntervalSeconds" },
-            new[] { "UnlockAllLevels", "Money", "DeveloperMode" },
+            new[] { "UnlockAllLevels", "Money", "DeveloperMode", "UnlockAllPlants" },
             new[] { "InfiniteSun", "SunFloor" },
             new[] { "GodModePlants", "PlantDamageMultiplier", "ZombieDamageTakenMultiplier", "OneHitZombies" },
             new[] { "TravelBuffs", "DamageReduction", "LuckyStrike", "DamageAmplification", "PlantZeroHealth", "BuffWhitelist", "UltiBuffWhitelist" },
             new[] { "TalentUnlockAll", "TalentStars", "DisableHardMode" },
             new[] { "AbyssMaxTickets", "AbyssInfiniteTickets" },
             new[] { "AutoCollectSun", "NoCardCooldown", "FreePlanting", "UnlimitedCardUse", "FreezeAllZombies", "ZombiesStopMoving", "AutoKillZombies" },
+            new[] { "GameSpeed", "StopZombieSpawn", "ZombieInvincible", "ZombieHpMultiplier", "NoToolCooldown" },
             new[] { "EspFontSize", "EspBold", "MenuFontSize", "AutoLaunchUi" },
         };
 
@@ -117,9 +169,15 @@ namespace PvzRhCheat
             { "FreezeAllZombies", "持续冻结全场僵尸" },
             { "ZombiesStopMoving", "僵尸停止移动" },
             { "AutoKillZombies", "自动秒杀新出现的僵尸" },
+            { "GameSpeed", "游戏速度倍率（Time.timeScale）" },
+            { "StopZombieSpawn", "停止出怪（关卡不再放僵尸）" },
+            { "ZombieInvincible", "僵尸无敌（僵尸不再掉血）" },
+            { "ZombieHpMultiplier", "僵尸血量倍率" },
+            { "NoToolCooldown", "手套 / 锤子无冷却" },
+            { "UnlockAllPlants", "植物图鉴 / 植物池全解锁" },
         };
 
-        private static readonly string[] TabNames = { "功能开关", "植物", "融合", "作弊动作", "设置" };
+        private static readonly string[] TabNames = { "功能开关", "植物", "融合", "沙盒", "作弊动作", "设置" };
 
         // ---------------------------------------------------------------- 对外
         /// <summary>鼠标是否压在菜单上 —— 用来屏蔽游戏自己的鼠标操作</summary>
@@ -178,7 +236,8 @@ namespace PvzRhCheat
                         case 0: TabToggles(cr); break;
                         case 1: TabPlants(cr); break;
                         case 2: TabFusion(cr); break;
-                        case 3: TabActions(cr); break;
+                        case 3: TabSandbox(cr); break;
+                        case 4: TabActions(cr); break;
                         default: TabSettings(cr); break;
                     }
                 }
@@ -358,6 +417,26 @@ namespace PvzRhCheat
             _editBuf = "";
 
             if (kind == EK_FILTER) { _pickerFilter = buf; _pickerPage = 0; return; }
+
+            if (kind == EK_SB)
+            {
+                int f = _sbEdit;
+                if (f == 99) { _lineup = buf; SetStatus("阵容码已填入（长度 " + buf.Length + "）"); return; }
+                if (f == SB_ZX)
+                {
+                    float x;
+                    if (float.TryParse(buf, NumberStyles.Float, CultureInfo.InvariantCulture, out x))
+                    { _sbZX = Mathf.Clamp(x, 0.1f, 12f); SetStatus("僵尸 X = " + _sbZX.ToString("0.##", CultureInfo.InvariantCulture)); }
+                    else SetStatus("X 不是合法数字");
+                    return;
+                }
+                int v;
+                if (!int.TryParse(buf, NumberStyles.Integer, CultureInfo.InvariantCulture, out v))
+                { SetStatus("不是合法整数"); return; }
+                SbSetInt(f, v);
+                SetStatus("已设置 = " + SbGetInt(f));
+                return;
+            }
 
             if (kind == EK_PLANT)
             {
@@ -750,7 +829,140 @@ namespace PvzRhCheat
                 new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
         }
 
-        // ================================================================ 页 3 动作
+        // ================================================================ 页 3 沙盒
+        private static void TabSandbox(Rect cr)
+        {
+            float rh = RowH;
+            float y = cr.y + 4f;
+            float colW = (cr.width - 14f) / 2f;
+
+            UiSkin.Text(new Rect(cr.x + 4f, y, cr.width, 20f),
+                "沙盒：直接在场地上放东西 / 全员变身 / 阵容码。数值框点一下就能改，回车确认。", UiSkin.Bold);
+            y += 22f;
+
+            // ---------- 左：植物放置
+            Rect L = new Rect(cr.x, y, colW, 132f);
+            Fill(L, UiSkin.ColBack2); UiSkin.Border(L, UiSkin.ColLine);
+            UiSkin.Text(new Rect(L.x + 6f, L.y + 2f, L.width - 12f, 20f), "植物放置", UiSkin.Bold);
+            if (UiSkin.Button(new Rect(L.x + 6f, L.y + 24f, L.width - 12f, 22f),
+                "植物: " + PlantDb.CnName(_sbPType) + "   (#" + _sbPType + ")", true, true))
+                OpenPicker(3, _sbPType);
+            SbNum(new Rect(L.x + 6f, L.y + 50f, (L.width - 18f) / 2f, 22f), "列", SB_COL);
+            SbNum(new Rect(L.x + 12f + (L.width - 18f) / 2f, L.y + 50f, (L.width - 18f) / 2f, 22f), "行", SB_ROW);
+            if (UiSkin.Button(new Rect(L.x + 6f, L.y + 76f, L.width - 12f, 24f), "放置植物", false, true))
+            {
+                string r = PlantDb.Spawn(_sbPType, _sbCol, _sbRow);
+                SetStatus(r);
+            }
+            UiSkin.Text(new Rect(L.x + 6f, L.y + 102f, L.width - 12f, 26f),
+                "走游戏自己的 CreatePlant.SetPlant，模型/血量都正常初始化。",
+                new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+
+            // ---------- 右：僵尸放置
+            Rect R = new Rect(cr.x + colW + 10f, y, colW, 132f);
+            Fill(R, UiSkin.ColBack2); UiSkin.Border(R, UiSkin.ColLine);
+            UiSkin.Text(new Rect(R.x + 6f, R.y + 2f, R.width - 12f, 20f), "僵尸放置", UiSkin.Bold);
+            if (UiSkin.Button(new Rect(R.x + 6f, R.y + 24f, R.width - 12f, 22f),
+                "僵尸: " + PlantDb.CnNameZombie(_sbZType) + "   (#" + _sbZType + ")", true, true))
+                OpenPicker(4, _sbZType);
+            SbNum(new Rect(R.x + 6f, R.y + 50f, 60f, 22f), "行", SB_ZROW);
+            SbNum(new Rect(R.x + 72f, R.y + 50f, 76f, 22f), "X", SB_ZX);
+            Rect mindR = new Rect(R.x + 154f, R.y + 50f, R.width - 160f, 22f);
+            if (UiSkin.Button(mindR, _sbZMind ? "魅惑: 开" : "魅惑: 关", _sbZMind, true)) _sbZMind = !_sbZMind;
+            if (UiSkin.Button(new Rect(R.x + 6f, R.y + 76f, R.width - 12f, 24f), "放置僵尸", false, true))
+                SetStatus(Actions.ActionSpawnZombie(_sbZRow, _sbZType, _sbZX, _sbZMind));
+            if (UiSkin.Button(new Rect(R.x + 6f, R.y + 102f, R.width - 12f, 24f), "清空全场僵尸", false, true))
+                SetStatus(Actions.ActionKillAllZombies());
+
+            y += 140f;
+
+            // ---------- 小推车 / 群体变身
+            Rect L2 = new Rect(cr.x, y, colW, 108f);
+            Fill(L2, UiSkin.ColBack2); UiSkin.Border(L2, UiSkin.ColLine);
+            UiSkin.Text(new Rect(L2.x + 6f, L2.y + 2f, L2.width - 12f, 20f), "小推车放置", UiSkin.Bold);
+            SbNum(new Rect(L2.x + 6f, L2.y + 24f, 60f, 22f), "行", SB_MROW);
+            SbNum(new Rect(L2.x + 72f, L2.y + 24f, 110f, 22f), "类型 0-4", SB_MTYPE);
+            if (UiSkin.Button(new Rect(L2.x + 6f, L2.y + 50f, L2.width - 12f, 24f), "放置小推车", false, true))
+                SetStatus(Actions.ActionSpawnMower(_sbMRow, _sbMType));
+            UiSkin.Text(new Rect(L2.x + 6f, L2.y + 76f, L2.width - 12f, 30f),
+                "0=草地 1=泳池 2=清洁车 3=草地射手 4=阳光车",
+                new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+
+            Rect R2 = new Rect(cr.x + colW + 10f, y, colW, 108f);
+            Fill(R2, UiSkin.ColBack2); UiSkin.Border(R2, UiSkin.ColLine);
+            UiSkin.Text(new Rect(R2.x + 6f, R2.y + 2f, R2.width - 12f, 20f), "全员变身", UiSkin.Bold);
+            if (UiSkin.Button(new Rect(R2.x + 6f, R2.y + 24f, R2.width - 12f, 22f),
+                "所有植物 → " + PlantDb.CnName(_sbCPType) + " (#" + _sbCPType + ")", true, true))
+                OpenPicker(5, _sbCPType);
+            if (UiSkin.Button(new Rect(R2.x + 6f, R2.y + 50f, (R2.width - 18f) / 2f, 24f), "执行", false, true))
+                SetStatus(Actions.ActionChangeAllPlants(_sbCPType));
+            if (UiSkin.Button(new Rect(R2.x + 12f + (R2.width - 18f) / 2f, R2.y + 50f, (R2.width - 18f) / 2f, 24f),
+                "杀光植物", false, true))
+                SetStatus(Actions.ActionKillAllPlants());
+            if (UiSkin.Button(new Rect(R2.x + 6f, R2.y + 78f, R2.width - 12f, 24f),
+                "所有僵尸 → " + PlantDb.CnNameZombie(_sbCZType) + " (#" + _sbCZType + ")", true, true))
+                OpenPicker(6, _sbCZType);
+
+            y += 116f;
+
+            // ---------- 阵容码
+            Rect lu = new Rect(cr.x, y, cr.width, Mathf.Max(80f, cr.yMax - y - 4f));
+            Fill(lu, UiSkin.ColBack2); UiSkin.Border(lu, UiSkin.ColLine);
+            UiSkin.Text(new Rect(lu.x + 6f, lu.y + 2f, lu.width - 12f, 20f),
+                "阵容码：把当前场上的植物+僵尸导出成一行文本，也可以粘回来一键复原", UiSkin.Bold);
+
+            bool luEdit = _editKind == EK_SB && _sbEdit == 99;
+            Rect luBox = new Rect(lu.x + 6f, lu.y + 24f, lu.width - 12f, 24f);
+            Fill(luBox, luEdit ? UiSkin.ColEdit : new Color(0.07f, 0.08f, 0.10f, 1f));
+            UiSkin.Border(luBox, luEdit ? UiSkin.ColYellow : UiSkin.ColLine);
+            UiSkin.Text(luBox, "阵容码: " + (luEdit ? _editBuf + "_" : (_lineup.Length == 0 ? "（点这里粘贴 PVZRH1;... 或先点导出）" : UiSkin.Fit(_lineup, 70))),
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = luEdit ? UiSkin.ColYellow : UiSkin.ColText });
+            if (UiSkin.Click(luBox, 0)) { _editKind = EK_SB; _sbEdit = 99; _editBuf = _lineup; _editText = true; }
+
+            float bw = (lu.width - 24f) / 3f;
+            if (UiSkin.Button(new Rect(lu.x + 6f, lu.y + 52f, bw, 24f), "导出阵容码", false, true))
+            { _lineup = Actions.ActionExportLineupCode(); SetStatus("阵容码已生成，可以直接用 Ctrl+A/Ctrl+C 复制输入框内容（也写进日志了）"); }
+            if (UiSkin.Button(new Rect(lu.x + 12f + bw, lu.y + 52f, bw, 24f), "应用阵容码", false, _lineup.Length > 0))
+                SetStatus(Actions.ActionImportLineup(_lineup));
+            if (UiSkin.Button(new Rect(lu.x + 18f + bw * 2f, lu.y + 52f, bw, 24f), "清空输入框", false, true))
+            { _lineup = ""; SetStatus("已清空"); }
+
+            UiSkin.Text(new Rect(lu.x + 6f, lu.y + 80f, lu.width - 12f, 34f),
+                "格式：PVZRH1;P列,行,植物ID;Z行,僵尸ID,是否魅惑,X —— 纯本地文本，不联网、不校验卡密。",
+                new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+        }
+
+        /// <summary>沙盒里的"标签 + 可编辑数值"小控件</summary>
+        private static void SbNum(Rect r, string label, int field)
+        {
+            float lw = 54f;
+            if (label == "类型 0-4")
+            {
+                lw = 62f;
+                UiSkin.Text(new Rect(r.x, r.y, lw - 2f, r.height), label, UiSkin.Left);
+            }
+            else UiSkin.Text(new Rect(r.x, r.y, lw - 4f, r.height), label, UiSkin.Left);
+
+            Rect box = new Rect(r.x + lw, r.y, r.width - lw, r.height);
+            bool editing = _editKind == EK_SB && _sbEdit == field;
+            Fill(box, editing ? UiSkin.ColEdit : new Color(0.07f, 0.08f, 0.10f, 1f));
+            UiSkin.Border(box, editing ? UiSkin.ColYellow : UiSkin.ColLine);
+            string shown;
+            if (field == SB_ZX) shown = _sbZX.ToString("0.##", CultureInfo.InvariantCulture);
+            else shown = SbGetInt(field).ToString(CultureInfo.InvariantCulture);
+            UiSkin.Text(box, editing ? _editBuf + "_" : shown, new UiSkin.TextOpt
+            { Align = TextAnchor.MiddleCenter, Style = editing ? FontStyle.Bold : FontStyle.Normal, Color = editing ? UiSkin.ColYellow : UiSkin.ColText });
+
+            if (UiSkin.Click(box, 0))
+            {
+                _editKind = EK_SB;
+                _sbEdit = field;
+                _editBuf = shown;
+                _editText = false;
+            }
+        }
+
+        // ================================================================ 页 4 作弊动作
         private static void TabActions(Rect cr)
         {
             float bw = (cr.width - 24f) / 2f;
@@ -773,6 +985,28 @@ namespace PvzRhCheat
             { Actions.RestorePlants(); SetStatus("已恢复所有植物"); }
             if (UiSkin.Button(new Rect(x1, y, bw, bh), "清空全部植物修改记录", false, true))
             { Overrides.ClearAll(); SetStatus("已清空全部植物修改"); }
+            y += bh + 8f;
+
+            // ---- 对齐 Modified-Plus 的批量动作 ----
+            if (UiSkin.Button(new Rect(x0, y, bw, bh), "全体植物升到 10 级", false, true))
+                SetStatus(Actions.ActionUpgradeAllPlants(10));
+            if (UiSkin.Button(new Rect(x1, y, bw, bh), "所有植物满血", false, true))
+                SetStatus(Actions.ActionHealAllPlants());
+            y += bh + 8f;
+            if (UiSkin.Button(new Rect(x0, y, bw, bh), "魅惑全场僵尸（变友军）", false, true))
+                SetStatus(Actions.ActionMindControlAll());
+            if (UiSkin.Button(new Rect(x1, y, bw, bh), "僵尸血量 ×10 并回满", false, true))
+                SetStatus(Actions.ActionSetAllZombieHp(10.0));
+            y += bh + 8f;
+            if (UiSkin.Button(new Rect(x0, y, bw, bh), "下一回合（旅行模式）", false, true))
+                SetStatus(Actions.ActionTravelNextRound());
+            if (UiSkin.Button(new Rect(x1, y, bw, bh), "杀死全部植物", false, true))
+                SetStatus(Actions.ActionKillAllPlants());
+            y += bh + 8f;
+            if (UiSkin.Button(new Rect(x0, y, bw, bh), "进入冒险模式 第 1 关", false, true))
+                SetStatus(Actions.ActionEnterGame(0, 1));
+            if (UiSkin.Button(new Rect(x1, y, bw, bh), "回到主菜单", false, true))
+                SetStatus(Actions.ActionEnterGame(-1, 1));
             y += bh + 12f;
 
             Fill(new Rect(cr.x, y, cr.width, cr.height - (y - cr.y) - 4f), UiSkin.ColBack2);
@@ -851,14 +1085,18 @@ namespace PvzRhCheat
         }
 
         // ================================================================ 类型选择器
+        // target: 0=把选中植物变成 1=融合伙伴 2=融合结果 3=沙盒植物 4=沙盒僵尸
+        //         5=群体变身(植物) 6=群体变身(僵尸)
         private static void OpenPicker(int target, int current)
         {
             _pickerOpen = true;
             _pickerTarget = target;
+            _pickerZombie = target == 4 || target == 6;
             _pickerFilter = "";
             _pickerPage = 0;
-            PlantDb.FilterTypes("");
-            SetStatus("选择植物类型：可以打字筛选，回车确认筛选内容");
+            PlantDb.FilterTypes("", _pickerZombie);
+            SetStatus(_pickerZombie ? "选择僵尸类型：可以打字筛选，回车确认筛选内容"
+                                    : "选择植物类型：可以打字筛选，回车确认筛选内容");
             _ = current;
         }
 
@@ -870,9 +1108,18 @@ namespace PvzRhCheat
             Fill(p, new Color(0.07f, 0.08f, 0.10f, 1f));
             UiSkin.Border(p, UiSkin.ColGreen);
 
-            UiSkin.Text(new Rect(p.x + 10f, p.y + 4f, p.width - 20f, 24f),
-                _pickerTarget == 0 ? "选择要变成的植物" : (_pickerTarget == 1 ? "选择融合的伙伴植物" : "选择融合结果植物"),
-                UiSkin.Bold);
+            string title;
+            switch (_pickerTarget)
+            {
+                case 0: title = "选择要变成的植物"; break;
+                case 1: title = "选择融合的伙伴植物"; break;
+                case 2: title = "选择融合结果植物"; break;
+                case 3: title = "沙盒：选择要放置的植物"; break;
+                case 4: title = "沙盒：选择要放置的僵尸"; break;
+                case 5: title = "群体变身：所有植物变成"; break;
+                default: title = "群体变身：所有僵尸变成"; break;
+            }
+            UiSkin.Text(new Rect(p.x + 10f, p.y + 4f, p.width - 90f, 24f), title, UiSkin.Bold);
 
             Rect closeR = new Rect(p.xMax - 70f, p.y + 5f, 60f, 22f);
             if (UiSkin.Button(closeR, "关闭", false, true)) { _pickerOpen = false; return; }
@@ -890,7 +1137,7 @@ namespace PvzRhCheat
                 _editText = true;
             }
 
-            var res = PlantDb.FilterTypes(_pickerFilter);
+            var res = PlantDb.FilterTypes(_pickerFilter, _pickerZombie);
             float rh = RowH;
             int vis = Mathf.Max(1, (int)((p.height - 32f - 24f - 34f) / rh));
             int pages = Mathf.Max(1, (res.Count + vis - 1) / vis);
@@ -905,10 +1152,10 @@ namespace PvzRhCheat
             for (int i = start; i < res.Count && i < start + vis; i++)
             {
                 int idx = res[i];
-                int id = PlantDb.TypeIdAt(idx);
+                int id = _pickerZombie ? PlantDb.ZombieTypeIdAt(idx) : PlantDb.TypeIdAt(idx);
+                string nm = _pickerZombie ? PlantDb.ZombieTypeNameAt(idx) : PlantDb.TypeNameAt(idx);
                 Rect r = new Rect(p.x + 8f, y, p.width - 16f, rh);
-                string txt = PlantDb.TypeNameAt(idx) + "   (#" + id + ")";
-                if (UiSkin.LeftButton(r, txt, false, UiSkin.ColText))
+                if (UiSkin.LeftButton(r, nm + "   (#" + id + ")", false, UiSkin.ColText))
                 {
                     _pickerOpen = false;
                     if (_pickerTarget == 0)
@@ -919,7 +1166,7 @@ namespace PvzRhCheat
                         SetStatus(e2 == null ? ("已变成 " + PlantDb.CnName(id)) : ("变身失败: " + e2));
                     }
                     else if (_pickerTarget == 1) { _recipePartner = id; SetStatus("伙伴 = " + PlantDb.CnName(id)); }
-                    else
+                    else if (_pickerTarget == 2)
                     {
                         _recipeResult = id;
                         if (_pickerCommit && _recipePartner >= 0)
@@ -934,6 +1181,10 @@ namespace PvzRhCheat
                         else SetStatus("结果 = " + PlantDb.CnName(id));
                         _pickerCommit = false;
                     }
+                    else if (_pickerTarget == 3) { SbSetInt(SB_PTYPE, id); SetStatus("沙盒植物 = " + PlantDb.CnName(id)); }
+                    else if (_pickerTarget == 4) { SbSetInt(SB_ZTYPE, id); SetStatus("沙盒僵尸 = " + PlantDb.CnNameZombie(id)); }
+                    else if (_pickerTarget == 5) { SbSetInt(SB_CPTYPE, id); SetStatus("群体变身目标 = " + PlantDb.CnName(id)); }
+                    else { SbSetInt(SB_CZTYPE, id); SetStatus("群体变身僵尸目标 = " + PlantDb.CnNameZombie(id)); }
                 }
                 y += rh;
             }

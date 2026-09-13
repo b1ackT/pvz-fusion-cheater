@@ -24,11 +24,11 @@
 > **鼠标压在菜单上时，游戏不响应点击** —— 插件给 `Mouse.Update` 打了前缀补丁，
 > 所以点菜单不会顺手在游戏里种植物、点卡片。
 
-菜单 5 个页签：
+菜单 6 个页签：
 
 ### 功能开关
-全部 30+ 个开关，按 9 组折叠：通用 / 解锁与资源 / 关卡内 / 战斗 / 旅行词条 / 天赋 /
-深渊抽奖券 / 经典作弊 / 界面与 ESP。
+全部 40+ 个开关，按 10 组折叠：通用 / 解锁与资源 / 关卡内 / 战斗 / 旅行词条 / 天赋 /
+深渊抽奖券 / 经典作弊 / **速度·僵尸·工具** / 界面与 ESP。
 布尔项是**绿底 ✓ 勾选框**（✓ 用字体字形画，字号比框大一号，清晰不发糊）；
 数值项点一下就能**直接在面板上打字改**，回车生效并写回 `BepInEx\config`。
 
@@ -96,9 +96,29 @@
    "原地改类型 + 强制 `ReplaceSprite()` / `SetPlantAttributes()`"，
    并在状态栏明确标注**"降级"**，不会假装成功。
 
+### 沙盒
+对齐老牌修改器 Modified-Plus 的"放置"那一套，全部走游戏自己的生成接口，模型/属性都正常初始化。
+
+| 功能 | 说明 | 走的游戏接口 |
+|---|---|---|
+| **植物放置** | 选植物 + 列 + 行 → 放一株 | `CreatePlant.SetPlant(col,row,type,null,...)` |
+| **僵尸放置** | 选僵尸 + 行 + X（0~12）+ 是否魅惑 | `CreateZombie.SetZombie` / `SetZombieWithMindControl` |
+| **小推车放置** | 选行 + 类型（0草地 1泳池 2清洁车 3草地射手 4阳光车） | `CreateMower.SetMower(type,x,row)` |
+| **清空全场僵尸** | 一键杀光 | `Zombie.Die` |
+| **全员变身（植物）** | 所有植物变成指定植物 | 两阶段：Die 退场 → 空格子上 `SetPlant` 重建 |
+| **全员变身（僵尸）** | 所有僵尸变成指定僵尸 | 同位置 `SetZombie` 新建 → 老的 `Die` |
+| **阵容码** | 把场上植物+僵尸导出成一行文本，也能粘回来复原 | `PVZRH1;P列,行,ID;Z行,ID,魅惑,X` |
+
+> 进游戏后如果不在关卡里，可以去「作弊动作」页点**进入冒险模式第 1 关**
+> （走 `UIMgr.EnterGame(LevelType, level)`），沙盒功能只有在关卡内才有效。
+
 ### 作弊动作
-一次性动作按钮：秒杀全场僵尸 / 立刻下一波 / 触发全部小推车 / 阳光设为 9999 /
-一键解锁全部内容 + 补满资源 / 补满当前阳光 / 恢复所有植物 / 清空全部植物修改记录。
+一次性动作按钮（两列）：
+秒杀全场僵尸 / 立刻下一波 / 触发全部小推车 / 阳光设为 9999 /
+一键解锁全部内容 + 补满资源 / 补满当前阳光 / 恢复所有植物 / 清空全部植物修改记录 /
+**全体植物升到 10 级** / **所有植物满血** / **魅惑全场僵尸（变友军）** /
+**僵尸血量 ×10 并回满** / **下一回合（旅行模式）** / **杀死全部植物** /
+**进入冒险模式第 1 关** / **回到主菜单**。
 
 ### 设置
 菜单字号（10~26）、**菜单窗口复位到左上角**、ESP 显示项（方框/名称/血量/序号/加粗/字号）、
@@ -158,6 +178,55 @@
 | 天赋 | 天赋树全解锁 + 星星拉满 + 关困难模式 | 后置 `AdvantureData.OnInit` |
 | 深渊 | 抽奖券拉满 / 不消耗 | 后置 `AbyssData.GetTicket`；前缀改写 `UseTicket` |
 | 输入 | 鼠标压在菜单上时不响应游戏点击 | 前缀 `Mouse.Update` |
+| **速度** | **游戏倍速（0.05x~20x）** | 写 `Time.timeScale` |
+| **僵尸** | **停止出怪** | 前缀跳过 `BoardSpawner.SummonZombies` |
+| **僵尸** | **僵尸无敌** | 前缀跳过 `Zombie.TakeDamage` |
+| **僵尸** | **僵尸血量倍率** | 周期写 `Zombie.theMaxHealth/theHealth` |
+| **僵尸** | **魅惑全场 / 批量变身** | `Zombie.SetMindControl` / `CreateZombie.SetZombie` |
+| **工具** | **手套/锤子/铁锹 无冷却** | 周期把 `InGameUI.GloveBank/HammerBank/ShovelBank` 上 `InGameTool.CD` 清零 + 后置 `Lawnf.GetGloveCD` 返回 0 |
+| **植物** | **图鉴/植物池全解锁** | 填 `GodManager.godData.unlockedPlants` |
+| **植物** | **全体升级 / 满血 / 清空** | `Plant.Upgrade` / 写 `thePlantHealth` / `Plant.Die` |
+| **关卡** | **进关卡 / 旅行下一回合** | `UIMgr.EnterGame` / `Board.TravelNextRound` |
+
+---
+
+## 2.5 和 Modified-Plus（老修改器）的对照
+
+用户提供了一个老版本修改器 `Modified-Plus V2.2.1`（作者 @高数带我飞，`pvz.ehre.top`，
+需要卡密联网验证）。我把它的 `Modified-Plus.dll` 反编译出元数据，
+把**它的功能清单**和本插件逐条对了一遍。已经补进来的：
+
+| Modified-Plus 的功能 | 本插件现在的状态 |
+|---|---|
+| 开发者模式、无CD模式、植物无属性CD | 等价（`DeveloperMode` / `NoCardCooldown` / `FreePlanting`） |
+| 植物图鉴解锁 / 植物解锁 | ✅ `UnlockAllPlants` |
+| 停止出怪 | ✅ `StopZombieSpawn` |
+| 设置阳光 / 设置金币 | ✅ `SunFloor` / `Money`（动作里也能一键设 9999） |
+| 游戏速度 / 恢复速度 | ✅ `GameSpeed` |
+| 植物放置（类型+列+行） | ✅ 沙盒页 |
+| 僵尸放置（类型+行+X） | ✅ 沙盒页（还多一个"魅惑"选项） |
+| 小推车放置（类型） | ✅ 沙盒页 |
+| 僵尸无敌 / 血量修改 | ✅ `ZombieInvincible` / `ZombieHpMultiplier` / 动作里 ×10 |
+| 魅惑全场僵尸 | ✅ 作弊动作页 |
+| 全体植物升级 | ✅ 作弊动作页（默认升到 10 级） |
+| 杀死全部植物 / 僵尸 | ✅ 作弊动作页 |
+| 阵容码导出/导入 | ✅ 有了，但用**我自己的纯文本格式**（`PVZRH1;...`），不联网、不需要卡密 |
+| 下一回合（普通/旅行） | ✅ 两个都有 |
+| 手套/锤子无冷却 | ✅ `NoToolCooldown` |
+| 词条修改（普通/僵尸/投资/强究） | ✅ 用**白名单**方式（`BuffWhitelist` / `UltiBuffWhitelist`），比它更直接：池子里只剩你要的 |
+| 深渊相关（金币/刷新次数/券） | ✅ `AbyssMaxTickets` / `AbyssInfiniteTickets` |
+
+**没有做 / 做不了的（诚实说明）**：
+
+| 它的功能 | 为什么没做 |
+|---|---|
+| 小宠物放置 / 小物件放置 | 需要确定 `PetType` / 小物件道具的生成接口，性价比不高 |
+| 出怪修改（拉出怪列表逐条改） | 要动 `Board.Zombies`（`List<ZombieSpawnData>`）的波次结构，改坏了一个都刷不出来，风险高于收益 |
+| 传送带修改 / 卡片修改（改卡池） | 同上，属于"改关卡数据表"级别，需要更多逆向验证 |
+| 关卡名称修改 | 游戏侧没有可安全写入的关卡名字段（`LevelName1` 只是 UI 上的 TextMeshProUGUI） |
+| 大花园皮肤修改 | 花园（`GardenPlant`）是另一套对象，本插件不碰 |
+| 输入植物/僵尸 ID 直接放 | 沙盒页已经能按中文名搜索选择，等价（也支持输编号筛选） |
+| 关于/赞赏支持/自动更新 | 与本插件定位无关 |
 
 ---
 
@@ -221,7 +290,14 @@ copy bin\Release\PvzRhCheat.dll ..\..\BepInEx\plugins\
 | `TYPES` | 返回 `id/name/cn` 的植物类型表 |
 | `PING` | 探活 |
 | `SELECTPTR\|<ptr>` | 按对象指针选中植物 |
-| `ACTION\|Plant\|<类型>\|<列>\|<行>` | 让游戏在指定格子放一株植物（自检用） |
+| `ACTION\|Plant\|<类型>\|<列>\|<行>` | 让游戏在指定格子放一株植物（沙盒） |
+| `ACTION\|SpawnZombie\|<行>\|<类型>\|<X>\|<魅惑>` | 放一只僵尸 |
+| `ACTION\|Mower\|<行>\|<类型>` | 放一台小推车 |
+| `ACTION\|EnterGame\|<关卡类型>\|<第几关>` | 直接进关卡（0=冒险 1=挑战 2=IZ 3=生存 4=探索 5=旅行 7=深渊 8=新冒险 9=塔 10=星冒险） |
+| `ACTION\|MindAll` / `KillAllPlants` / `KillAllZombies` / `HealPlants` / `UpgradePlants\|<等级>` | 批量动作 |
+| `ACTION\|ZombieHp\|<倍率>` / `ChangeAllPlants\|<类型>` / `ChangeAllZombies\|<类型>` | 僵尸血量倍率 / 群体变身 |
+| `ACTION\|ExportLineup` / `ImportLineup\|<阵容码>` | 阵容码 |
+| `ACTION\|Speed\|<倍率>` / `Zombies` | 游戏速度 / 数僵尸 |
 | `ACTION\|Fuse\|<伙伴类型>` | 让当前选中的植物与该伙伴直接融合 |
 | `ACTION\|FusionTest\|<类型>` | 跑一遍融合页的全部游戏调用并输出报告（不需要看屏幕就能验证） |
 
@@ -270,7 +346,6 @@ Il2CppInterop 会把注入类型（`EspOverlay` / `MenuOverlay`）的**所有方
 `MenuUI` 里（普通类没有这个限制，想怎么写就怎么写）。
 
 ### 6.5 `out ValueTuple` 会把游戏直接干崩（重要）
-
 `MixData.TryGetDisMix(PlantType, out ValueTuple<PlantType,PlantType>)` 这类
 **`out` 值元组**在 Il2CppInterop 下是坏的：调用了 3 次没事，
 第 4 次（查一个真的有父节点的融合体时）整个进程 **访问违例**崩溃：
@@ -288,13 +363,41 @@ Exception code: 0xc0000005
 
 > 这三条对以后给这个游戏写任何 IMGUI 工具都适用。
 
+### 6.6 给"游戏早期用 native 方式建出来的对象"打补丁会崩（重要）
+
+本来"手套/锤子无冷却"是想用 Harmony 前缀给 `InGameTool.UpdateCDTimer` 清零 CD 的，
+结果一进游戏就崩：
+
+```
+[Error:Il2CppInterop] During invoking native->managed trampoline
+Exception: System.InvalidOperationException: Handle is not initialized.
+   at Il2CppInterop.Runtime.Runtime.Il2CppObjectPool.Get[T](IntPtr ptr)
+   at (il2cpp -> managed) UpdateCDTimer(IntPtr, Il2CppMethodInfo*)
+```
+
+`__instance` 参数让蹦床去 `Il2CppObjectPool` 里找托管包装，而这类对象的 GCHandle 还没初始化，
+于是抛异常 → 整个进程 `0xc0000005`。
+**规则：给这类方法打补丁时不要注入 `__instance`**，改成在主循环里
+通过 `InGameUI.Instance` 上的字段（`GloveBank`/`HammerBank`/`ShovelBank`）
+拿到对象直接改字段，零风险。
+
+### 6.7 批量操作一定要在"动手之前"记下坐标
+
+"所有植物变成 X"最早写成"每周期从植物列表重新推坐标"，
+结果第一周期把植物 `Die` 掉之后列表就空了，**只杀了不重建**。
+现在改成请求时先把 `(列,行)` 记进一个列表，之后按这个列表分周期重建。
+
+同样地，`Plant.Upgrade(...)` 在这个构建里会**返回 false**（不是抛异常），
+所以升级动作必须"返回 false 就退回直接写 `theLevel`"，只按返回值判断会一株都升不了。
+
 ---
 
 ## 7. 实测验证
 
-补丁加载 **15/15 全部成功**（`GameAPP_Awake/_Update`、`Board_UseSun/_UseMoney`、
+补丁加载 **18/18 全部成功**（`GameAPP_Awake/_Update`、`Board_UseSun/_UseMoney`、
 `Plant_TakeDamage/_RealTakeDamage/_DecreaseHealth`、`Zombie_TakeDamage`、`Bullet_InitData`、
-`Travel_AdvBuffPool/_UltiBuffPool`、`Advanture_OnInit`、`Abyss_GetTicket/_UseTicket`、`Mouse_Update`）。
+`Travel_AdvBuffPool/_UltiBuffPool`、`Advanture_OnInit`、`Abyss_GetTicket/_UseTicket`、`Mouse_Update`、
+`BoardSpawner_SummonZombies`、`Lawnf_GetGloveCD`）。
 
 游戏把结果持久化到 `playerData.json`，证明修改真实生效：
 
@@ -322,6 +425,23 @@ Exception code: 0xc0000005
 ```
 
 反向表：`[融合] 反向表建立完成：1274 条配方，覆盖 523 种结果`
+
+新增功能的实测（全部通过 `ACTION` 接口脚本化验证，日志为准）：
+
+```
+停止出怪        开关打开 + 重进关卡 + 等 35 秒  ->  场上僵尸 0 只
+植物放置        ACTION|Plant|0|3|2              ->  豌豆射手 (3,2)
+僵尸放置        ACTION|SpawnZombie|2|0|9|0      ->  已在第 3 行 x=9 放置僵尸 #0
+小推车放置      ACTION|Mower|4|1                ->  已在第 5 行放置小推车 #1
+魅惑全场        ACTION|MindAll                  ->  已魅惑 1 只僵尸
+僵尸血量 ×10    ACTION|ZombieHp|10              ->  已把 1 只僵尸的血量设为 10 倍
+僵尸群体变身    ACTION|ChangeAllZombies|1       ->  1 只新建，旧僵尸清掉 2 只
+全体升级        ACTION|UpgradePlants|5         ->  已把 2 株植物升到 5 级（lv=5 实测）
+植物群体变身    ACTION|ChangeAllPlants|32       ->  记下 2 个格子 -> 已重建 2 株 -> 西瓜投手 (3,2)/(5,3)
+阵容码          ExportLineup / ImportLineup     ->  PVZRH1;P3,2,0;Z2,0,1,10.03;... -> 植物 1 僵尸 2
+旅行下一回合    ACTION|TravelNext               ->  已跳到旅行模式的下一回合
+进关卡          ACTION|EnterGame|0|1            ->  Advanture Lv1 / Day（inLevel=1）
+```
 
 ---
 

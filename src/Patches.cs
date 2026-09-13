@@ -36,6 +36,9 @@ namespace PvzRhCheat
 
             // 界面上点的"直接融合"在这里执行：不在 IMGUI 事件里动场景对象
             try { RunPendingFuse(); } catch (Exception e) { LogSlow("FastTick/融合", e); }
+            // 批量变身 / 游戏速度（每帧都要保持，不走 0.25 秒的节流）
+            try { RunPendingChangeAll(); } catch (Exception e) { LogSlow("FastTick/批量变身", e); }
+            try { GameSpeedTweak(); } catch (Exception e) { LogSlow("FastTick/速度", e); }
             // 融合会换掉植物对象，重新读一次列表
             if (RefreshPlantsAgain()) RefreshPlants();
 
@@ -516,11 +519,14 @@ namespace PvzRhCheat
             }
 
             Step(UnlockAndResources, nameof(UnlockAndResources));
+            Step(UnlockPlantsTweak,   nameof(UnlockPlantsTweak));
             Step(TopUpSun,            nameof(TopUpSun));
             Step(RestorePlants,       nameof(RestorePlants));
             Step(ApplyPlantOverrides, nameof(ApplyPlantOverrides));
             Step(TravelTweaks,        nameof(TravelTweaks));
             Step(ClassicCheats,       nameof(ClassicCheats));
+            Step(ZombieHpTweak,       nameof(ZombieHpTweak));
+            Step(Tools.ZeroCooldowns, nameof(Tools.ZeroCooldowns));
 
             if (!_loggedOnce)
             {
@@ -629,6 +635,28 @@ namespace PvzRhCheat
 
         private static void ForEachZombie(Action<Zombie> fn)
         {
+            // 实测非泛型 FindObjectsOfType 对 Plant 会静默返回空，僵尸也一并不可信，
+            // 所以优先用游戏自己的 Lawnf.GetAllZombies(bool)（普通 + 被魅惑两批）
+            bool any = false;
+            for (int pass = 0; pass < 2; pass++)
+            {
+                try
+                {
+                    var list = Lawnf.GetAllZombies(pass == 1);
+                    if (list == null) continue;
+                    for (int i = 0; i < list.Count; i++)
+                    {
+                        Zombie z = list[i];
+                        if (z == null) continue;
+                        any = true;
+                        try { fn(z); } catch { }
+                    }
+                }
+                catch (Exception e) { if (pass == 0) LogSlow("zombies/GetAllZombies", e); }
+            }
+            if (any) return;
+
+            // 兜底：老办法
             var arr = FindAll(typeof(Zombie));
             if (arr == null) return;
             for (int i = 0; i < arr.Length; i++)
@@ -640,6 +668,22 @@ namespace PvzRhCheat
                 if (z == null) continue;
                 try { fn(z); } catch { }
             }
+        }
+
+        /// <summary>数一下现在有多少僵尸（给界面显示用）</summary>
+        internal static int ZombieCount()
+        {
+            int n = 0;
+            for (int pass = 0; pass < 2; pass++)
+            {
+                try
+                {
+                    var list = Lawnf.GetAllZombies(pass == 1);
+                    if (list != null) n += list.Count;
+                }
+                catch { }
+            }
+            return n;
         }
 
         private static void FreezeOne(Zombie z) { try { z.SetFreeze(30f, 3); } catch { } }
@@ -725,6 +769,447 @@ namespace PvzRhCheat
         internal static void ApplyPlantOverrides()
         {
             for (int i = 0; i < _plants.Count; i++) Overrides.Apply(_plants[i]);
+        }
+
+        // ================================================================== 对齐 Modified-Plus 的额外功能
+        /// <summary>游戏速度：直接写 Time.timeScale。FastTick 用的是 unscaledTime，所以自己不会被拖慢。</summary>
+        internal static void GameSpeedTweak()
+        {
+            float want = 1f;
+            try { want = ModConfig.GameSpeed.Value; } catch { }
+            if (want < 0.05f) want = 0.05f;
+            if (want > 20f) want = 20f;
+            try { if (Math.Abs(Time.timeScale - want) > 0.001f) Time.timeScale = want; } catch { }
+        }
+
+        /// <summary>僵尸血量倍率 + 僵尸无敌兜底回血</summary>
+        private static readonly System.Collections.Generic.Dictionary<IntPtr, long> _zBaseHp =
+            new System.Collections.Generic.Dictionary<IntPtr, long>();
+
+        internal static void ZombieHpTweak()
+        {
+            float mult = 1f;
+            try { mult = ModConfig.ZombieHpMultiplier.Value; } catch { }
+            bool inv = false;
+            try { inv = ModConfig.ZombieInvincible.Value; } catch { }
+            if (Math.Abs(mult - 1f) < 0.001f && !inv) return;
+
+            ForEachZombie(z =>
+            {
+                try
+                {
+                    IntPtr key = z.Pointer;
+                    if (Math.Abs(mult - 1f) > 0.001f)
+                    {
+                        long baseHp;
+                        if (!_zBaseHp.TryGetValue(key, out baseHp) || baseHp <= 0)
+                        {
+                            baseHp = z.theMaxHealth;
+                            if (baseHp <= 0) return;
+                            _zBaseHp[key] = baseHp;
+                        }
+                        long want = (long)(baseHp * (double)mult);
+                        if (want < 1L) want = 1L;
+                        if (z.theMaxHealth != want)
+                        {
+                            double ratio = z.theMaxHealth > 0 ? (double)z.theHealth / z.theMaxHealth : 1.0;
+                            z.theMaxHealth = want;
+                            z.theHealth = (long)(want * ratio);
+                        }
+                    }
+                    if (inv && z.theHealth < z.theMaxHealth) z.theHealth = z.theMaxHealth;
+                }
+                catch { }
+            });
+        }
+
+        /// <summary>植物图鉴 / 植物池全解锁：填 GodManager.godData.unlockedPlants</summary>
+        internal static void UnlockPlantsTweak()
+        {
+            bool on = false;
+            try { on = ModConfig.UnlockAllPlants.Value; } catch { }
+            if (!on) return;
+            try
+            {
+                GodData gd = GodManager.godData;
+                if (gd == null) return;
+                var list = gd.unlockedPlants;
+                if (list == null) return;
+                foreach (object o in Enum.GetValues(typeof(PlantType)))
+                {
+                    int v = Convert.ToInt32(o);
+                    if (v < 0) continue;
+                    PlantType t = (PlantType)v;
+                    try { if (!list.Contains(t)) list.Add(t); } catch { }
+                }
+            }
+            catch (Exception e) { LogSlow("unlockPlants", e); }
+        }
+
+        // ---- 一次性动作：植物 / 僵尸 批量 ----
+        internal static string ActionKillAllPlants()
+        {
+            int n = 0;
+            for (int i = 0; i < _plants.Count; i++)
+            {
+                Plant p = _plants[i];
+                if (p == null) continue;
+                try { p.Die(); n++; } catch { }
+            }
+            Plugin.Log.LogInfo("[作弊] 清除植物 " + n + " 株");
+            return "已清除植物 " + n + " 株";
+        }
+
+        internal static string ActionHealAllPlants()
+        {
+            int n = 0;
+            for (int i = 0; i < _plants.Count; i++)
+            {
+                Plant p = _plants[i];
+                if (p == null) continue;
+                try
+                {
+                    if (p.thePlantHealth < p.thePlantMaxHealth) { p.thePlantHealth = p.thePlantMaxHealth; n++; }
+                }
+                catch { }
+            }
+            string m = "已补满 " + n + " 株植物的血量";
+            Plugin.Log.LogInfo("[作弊] " + m);
+            return m;
+        }
+
+        internal static string ActionUpgradeAllPlants(int level)
+        {
+            if (level < 1) level = 1;
+            if (level > 99) level = 99;
+            int n = 0, fail = 0;
+            string firstErr = null;
+            for (int i = 0; i < _plants.Count; i++)
+            {
+                Plant p = _plants[i];
+                if (p == null) continue;
+                try
+                {
+                    if (p.Upgrade(level, true, false)) { n++; continue; }
+                    if (firstErr == null) firstErr = "Upgrade 返回 false";
+                }
+                catch (Exception e) { if (firstErr == null) firstErr = "Upgrade: " + e.GetType().Name + " " + e.Message; }
+
+                try { p.theLevel = level; n++; }
+                catch (Exception e2)
+                {
+                    fail++;
+                    if (firstErr == null) firstErr = "写 theLevel: " + e2.GetType().Name + " " + e2.Message;
+                }
+            }
+            string m = "已把 " + n + " 株植物升到 " + level + " 级"
+                     + (fail > 0 ? ("（" + fail + " 株失败；" + (firstErr ?? "?") + "）") : "");
+            Plugin.Log.LogInfo("[作弊] " + m);
+            return m;
+        }
+
+        internal static string ActionMindControlAll()
+        {
+            int n = 0;
+            ForEachZombie(z =>
+            {
+                try { if (!z.isMindControlled) { z.SetMindControl(0); n++; } }
+                catch { }
+            });
+            string m = "已魅惑 " + n + " 只僵尸";
+            Plugin.Log.LogInfo("[作弊] " + m);
+            return m;
+        }
+
+        internal static string ActionZombieInvincibleToggle() { return ""; }
+
+        internal static string ActionSetAllZombieHp(double mult)
+        {
+            if (mult < 0.1) mult = 0.1;
+            if (mult > 100) mult = 100;
+            int n = 0;
+            ForEachZombie(z =>
+            {
+                try
+                {
+                    long baseHp = z.theMaxHealth;
+                    IntPtr key = z.Pointer;
+                    long stored;
+                    if (_zBaseHp.TryGetValue(key, out stored) && stored > 0) baseHp = stored;
+                    else _zBaseHp[key] = baseHp;
+                    long want = (long)(baseHp * mult);
+                    if (want < 1L) want = 1L;
+                    z.theMaxHealth = want;
+                    z.theHealth = want;
+                    n++;
+                }
+                catch { }
+            });
+            return "已把 " + n + " 只僵尸的血量设为 " + mult.ToString("0.##") + " 倍";
+        }
+
+        /// <summary>
+        /// 所有僵尸变成指定类型。
+        /// Zombie 没有 ReplaceSprite（改了类型贴图不会变），所以走"先在同位置生成新的，再让老的死"，
+        /// 这样新僵尸是游戏自己完整初始化的。
+        /// </summary>
+        internal static string ActionChangeAllZombies(int typeId)
+        {
+            if (typeId < 0) return "类型无效";
+            var old = new System.Collections.Generic.List<float[]>();   // row, x, mind
+            ForEachZombie(z =>
+            {
+                try
+                {
+                    float x = 9.9f;
+                    try { x = z.transform.position.x; } catch { }
+                    old.Add(new[] { z.theZombieRow, x, z.isMindControlled ? 1f : 0f });
+                }
+                catch { }
+            });
+
+            int n = 0;
+            foreach (float[] d in old)
+            {
+                int row = (int)d[0];
+                float x = d[1];
+                if (x <= 0f || x > 12f) x = 9.9f;
+                string r = ActionSpawnZombie(row, typeId, x, d[2] > 0.5f);
+                if (r.StartsWith("已在")) n++;
+            }
+            int killed = 0;
+            ForEachZombie(z =>
+            {
+                try { z.Die(0); killed++; } catch { }
+            });
+            return "所有僵尸已变成 #" + typeId + "：" + n + " 只新建，旧僵尸清掉 " + killed + " 只";
+        }
+
+        internal static string ActionTravelNextRound()
+        {
+            try
+            {
+                Board b = Board.Instance;
+                if (b == null) return "不在关卡内";
+                b.TravelNextRound();
+                return "已跳到旅行模式的下一回合";
+            }
+            catch (Exception e) { return "旅行下一回合失败: " + e.GetType().Name; }
+        }
+
+        internal static string ActionSetLevelName(string name)
+        {
+            // 游戏侧没有可安全写入的关卡名字段（LevelName1 是 UI 上的 TextMeshProUGUI），
+            // 这个功能价值也不高，暂不实现，避免为了改一个标题去碰 UI 对象。
+            return "该功能暂未实现（游戏侧没有可安全写入的关卡名字段）";
+        }
+
+        // ---- 沙盒：放置僵尸 / 小推车 ----
+        /// <summary>
+        /// 直接进关卡：UIMgr.EnterGame(LevelType, levelNumber, id, name) 是游戏自己的入口。
+        /// 顺带解决"必须在关卡内才能用沙盒功能"的问题。
+        /// </summary>
+        internal static string ActionEnterGame(int levelType, int levelNumber)
+        {
+            if (levelNumber < 1) levelNumber = 1;
+            try
+            {
+                UIMgr.EnterGame((LevelType)levelType, levelNumber, -1, null);
+                Plugin.Log.LogInfo("[进关卡] LevelType=" + levelType + " 第 " + levelNumber + " 关");
+                return "正在进入 关卡类型" + levelType + " 第 " + levelNumber + " 关…";
+            }
+            catch (Exception e) { return "进关卡失败: " + e.GetType().Name + " " + e.Message; }
+        }
+        internal static string ActionSpawnZombie(int row, int typeId, float x, bool mind)
+        {
+            if (typeId < 0) return "僵尸类型无效";
+            if (row < 0) row = 0;
+            if (row > 6) row = 6;
+            if (x <= 0f || x > 12f) x = 9.9f;
+            try
+            {
+                CreateZombie cz = CreateZombie.Instance;
+                if (cz == null) return "CreateZombie.Instance 为空（不在关卡内）";
+                Zombie z = mind
+                    ? cz.SetZombieWithMindControl(row, (ZombieType)typeId, x, true)
+                    : cz.SetZombie(row, (ZombieType)typeId, x, false);
+                if (z == null) return "SetZombie 返回空";
+                _zBaseHp.Remove(z.Pointer);
+                return "已在第 " + (row + 1) + " 行 x=" + x.ToString("0.##") + " 放置僵尸 #" + typeId + (mind ? "（魅惑）" : "");
+            }
+            catch (Exception e) { return "放置僵尸失败: " + e.GetType().Name + " " + e.Message; }
+        }
+
+        internal static string ActionSpawnMower(int row, int mowerTypeId)
+        {
+            if (row < 0) row = 0;
+            if (row > 6) row = 6;
+            if (mowerTypeId < 0) mowerTypeId = 0;
+            try
+            {
+                CreateMower cm = CreateMower.Instance;
+                if (cm == null) return "CreateMower.Instance 为空（不在关卡内）";
+                Mower m = cm.SetMower((MowerType)mowerTypeId, 0f, row);
+                if (m == null) return "SetMower 返回空";
+                return "已在第 " + (row + 1) + " 行放置小推车 #" + mowerTypeId;
+            }
+            catch (Exception e) { return "放置小推车失败: " + e.GetType().Name + " " + e.Message; }
+        }
+
+        /// <summary>所有植物变成指定类型（走已验证的两阶段重建）</summary>
+        internal static string ActionChangeAllPlants(int typeId)
+        {
+            if (typeId < 0) return "类型无效";
+
+            // 关键：坐标必须在"让它们退场之前"记下来。
+            // 之前是每周期从 _plants 重新推坐标，植物一死列表就空了，结果只杀了不重建。
+            _changeAllCells.Clear();
+            int n = 0;
+            for (int i = 0; i < _plants.Count; i++)
+            {
+                Plant p = _plants[i];
+                if (p == null) continue;
+                try
+                {
+                    int col = p.thePlantColumn, row = p.thePlantRow;
+                    if (col < 0 || row < 0) continue;
+                    _changeAllCells.Add(new[] { col, row });
+                    n++;
+                }
+                catch { }
+            }
+            foreach (int[] c in _changeAllCells)
+            {
+                Plant cur = PlantDb.CellPlant(c[0], c[1]);
+                if (cur == null) continue;
+                try { PlantDb.EjectOld(cur); } catch { }
+            }
+            _changeAllTo = typeId;
+            _changeAllTries = 0;
+            string rm = "正在把 " + n + " 株植物变成 " + PlantDb.CnName(typeId) + " …（记下 " + _changeAllCells.Count + " 个格子，分周期重建）";
+            Plugin.Log.LogInfo("[作弊] " + rm);
+            return rm;
+        }
+
+        private static int _changeAllTo = -1;
+        private static int _changeAllTries;
+        private static readonly System.Collections.Generic.List<int[]> _changeAllCells =
+            new System.Collections.Generic.List<int[]>();
+
+        /// <summary>批量变身的第二阶段：等格子腾空后逐个重建（用第一阶段记下的格子）</summary>
+        internal static void RunPendingChangeAll()
+        {
+            if (_changeAllTo < 0) return;
+            _changeAllTries++;
+
+            int done = 0;
+            var still = new System.Collections.Generic.List<int[]>();
+            foreach (int[] c in _changeAllCells)
+            {
+                Plant cur = null;
+                try { cur = PlantDb.CellPlant(c[0], c[1]); } catch { }
+
+                if (cur != null)
+                {
+                    int t = -1;
+                    try { t = (int)cur.thePlantType; } catch { }
+                    if (t == _changeAllTo) { done++; continue; }     // 已经是目标类型
+                }
+
+                Plant created;
+                string e2 = PlantDb.SpawnAt(c[0], c[1], _changeAllTo,
+                                            new Vector2(0f, 0f), out created);
+                if (e2 == null) { done++; continue; }
+                still.Add(c);                                        // 格子还被占着，下个周期再试
+            }
+            _changeAllCells.Clear();
+            _changeAllCells.AddRange(still);
+
+            if (done > 0)
+            {
+                string dm = "批量变身：已重建 " + done + " 株（剩余 " + _changeAllCells.Count + "）";
+                MenuUI.SetStatus(dm);
+                Plugin.Log.LogInfo("[作弊] " + dm);
+            }
+            if (_changeAllCells.Count == 0 || _changeAllTries >= 12)
+            {
+                int total = _changeAllTo;
+                _changeAllTo = -1;
+                _changeAllCells.Clear();
+                string em = "批量变身结束（目标 " + PlantDb.CnName(total) + "）";
+                MenuUI.SetStatus(em);
+                Plugin.Log.LogInfo("[作弊] " + em);
+            }
+        }
+
+        // ---- 阵容码（自己的文本格式，纯本地，不联网）----
+        /// <summary>只返回阵容码本身（给界面输入框用）</summary>
+        internal static string ActionExportLineupCode() { return BuildLineupCode(); }
+
+        internal static string ActionExportLineup()
+        {
+            string code = BuildLineupCode();
+            Plugin.Log.LogInfo("[阵容码] " + code);
+            return "阵容码已写入日志（植物 " + _plants.Count + " 株）：\n" + code;
+        }
+
+        private static string BuildLineupCode()
+        {
+            var sb = new System.Text.StringBuilder(512);
+            sb.Append("PVZRH1;");
+            for (int i = 0; i < _plants.Count; i++)
+            {
+                Plant p = _plants[i];
+                if (p == null) continue;
+                try { sb.Append("P").Append(p.thePlantColumn).Append(',').Append(p.thePlantRow).Append(',').Append((int)p.thePlantType).Append(';'); }
+                catch { }
+            }
+            ForEachZombie(z =>
+            {
+                try
+                {
+                    float x = 9.9f;
+                    try { x = z.transform.position.x; } catch { }
+                    sb.Append("Z").Append(z.theZombieRow).Append(',').Append((int)z.theZombieType)
+                      .Append(',').Append(z.isMindControlled ? 1 : 0).Append(',')
+                      .Append(x.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture)).Append(';');
+                }
+                catch { }
+            });
+            return sb.ToString();
+        }
+
+        internal static string ActionImportLineup(string code)
+        {
+            if (string.IsNullOrEmpty(code) || !code.StartsWith("PVZRH1")) return "阵容码格式不对（应以 PVZRH1 开头）";
+            int np = 0, nz = 0, bad = 0;
+            foreach (string part in code.Split(';'))
+            {
+                if (part.Length < 2) continue;
+                string[] f = part.Substring(1).Split(',');
+                try
+                {
+                    if (part[0] == 'P' && f.Length >= 3)
+                    {
+                        int col = int.Parse(f[0]), row = int.Parse(f[1]), t = int.Parse(f[2]);
+                        Plant created;
+                        if (PlantDb.SpawnAt(col, row, t, new Vector2(0f, 0f), out created) == null) np++;
+                        else bad++;
+                    }
+                    else if (part[0] == 'Z' && f.Length >= 3)
+                    {
+                        int row = int.Parse(f[0]), t = int.Parse(f[1]);
+                        bool mind = f.Length > 2 && f[2] == "1";
+                        float x = 9.9f;
+                        if (f.Length > 3) float.TryParse(f[3], System.Globalization.NumberStyles.Float,
+                                                         System.Globalization.CultureInfo.InvariantCulture, out x);
+                        if (ActionSpawnZombie(row, t, x, mind).StartsWith("已在")) nz++;
+                        else bad++;
+                    }
+                }
+                catch { bad++; }
+            }
+            return "阵容码已应用：植物 " + np + " 株 / 僵尸 " + nz + " 只" + (bad > 0 ? ("（" + bad + " 条失败）") : "");
         }
 
         // ------------------------------------------------------------------ 旅行模式强化
@@ -912,14 +1397,17 @@ namespace PvzRhCheat
     internal static class Patch_Zombie_TakeDamage
     {
         [HarmonyPrefix]
-        private static void Prefix(ref int theDamage)
+        private static bool Prefix(ref int theDamage)
         {
-            if (!ModConfig.Enabled.Value) return;
+            if (!ModConfig.Enabled.Value) return true;
+
+            // 僵尸无敌：直接不扣血
+            if (ModConfig.ZombieInvincible.Value) return false;
 
             if (ModConfig.OneHitZombies.Value)
             {
                 theDamage = 1_000_000_000;
-                return;
+                return true;
             }
             double m = (double)ModConfig.PlantDamageMultiplier.Value * ModConfig.ZombieDamageTakenMultiplier.Value;
             if (m > 1.0001d && theDamage > 0)
@@ -927,6 +1415,67 @@ namespace PvzRhCheat
                 double v = theDamage * m;
                 theDamage = v > 1_000_000_000d ? 1_000_000_000 : (int)v;
             }
+            return true;
+        }
+    }
+
+    /// <summary>停止出怪：BoardSpawner.SummonZombies 是关卡放僵尸的入口，直接跳过它。</summary>
+    [HarmonyPatch(typeof(BoardSpawner), "SummonZombies")]
+    internal static class Patch_BoardSpawner_SummonZombies
+    {
+        [HarmonyPrefix]
+        private static bool Prefix() { return !(ModConfig.Enabled.Value && ModConfig.StopZombieSpawn.Value); }
+    }
+
+    /// <summary>
+    /// 手套/锤子/铁锹 无冷却。
+    ///
+    /// 注意：这里**故意不用 Harmony 打 InGameTool 的补丁**。
+    /// 实测给 `InGameTool.UpdateCDTimer` 加 `InGameTool __instance` 参数会让
+    /// Il2CppInterop 的 native->managed 蹦床抛 "Handle is not initialized"，
+    /// 然后整个游戏 0xc0000005 崩掉（因为工具对象是游戏早期用 native 方式建出来的）。
+    /// 改成在主循环里直接拿 InGameUI 上的三个工具对象把 CD 清零。
+    /// </summary>
+    internal static class Tools
+    {
+        internal static void ZeroCooldowns()
+        {
+            try
+            {
+                if (!ModConfig.Enabled.Value || !ModConfig.NoToolCooldown.Value) return;
+                InGameUI ui = InGameUI.Instance;
+                if (ui == null) return;
+                Zero(ui.GloveBank);
+                Zero(ui.HammerBank);
+                Zero(ui.ShovelBank);
+            }
+            catch { }
+        }
+
+        private static void Zero(GameObject go)
+        {
+            if (go == null) return;
+            try
+            {
+                var comp = go.GetComponent(Il2CppInterop.Runtime.Il2CppType.Of<InGameTool>());
+                if (comp == null) return;
+                InGameTool t = comp.TryCast<InGameTool>();
+                if (t == null) return;
+                t.CD = 0f;
+                t.fullCD = 0f;
+                t.avaliable = true;
+            }
+            catch { }
+        }
+    }
+
+    [HarmonyPatch(typeof(Lawnf), "GetGloveCD")]
+    internal static class Patch_Lawnf_GetGloveCD
+    {
+        [HarmonyPostfix]
+        private static void Postfix(ref float __result)
+        {
+            if (ModConfig.Enabled.Value && ModConfig.NoToolCooldown.Value) __result = 0f;
         }
     }
 

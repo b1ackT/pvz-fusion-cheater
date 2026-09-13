@@ -209,6 +209,31 @@ namespace PvzRhCheat
                                 msg = PlantDb.Spawn(I(p[2]), I(p[3]), I(p[4]));
                             }
                             break;
+                        case "TravelNext": msg = Actions.ActionTravelNextRound(); break;
+                        case "EnterGame":
+                            msg = p.Length > 3 ? Actions.ActionEnterGame(I(p[2]), I(p[3]))
+                                               : "用法: ACTION|EnterGame|关卡类型|第几关";
+                            break;
+                        case "KillAllPlants": msg = Actions.ActionKillAllPlants(); break;
+                        case "HealPlants": msg = Actions.ActionHealAllPlants(); break;
+                        case "UpgradePlants": msg = Actions.ActionUpgradeAllPlants(p.Length > 2 ? I(p[2]) : 10); break;
+                        case "MindAll": msg = Actions.ActionMindControlAll(); break;
+                        case "ZombieHp": msg = p.Length > 2 ? Actions.ActionSetAllZombieHp(F(p[2])) : "缺少倍率"; break;
+                        case "ChangeAllPlants": msg = p.Length > 2 ? Actions.ActionChangeAllPlants(I(p[2])) : "缺少类型"; break;
+                        case "ChangeAllZombies": msg = p.Length > 2 ? Actions.ActionChangeAllZombies(I(p[2])) : "缺少类型"; break;
+                        case "SpawnZombie":
+                            msg = p.Length > 3
+                                ? Actions.ActionSpawnZombie(I(p[2]), I(p[3]), p.Length > 4 ? F(p[4]) : 9.9f, p.Length > 5 && p[5] == "1")
+                                : "用法: ACTION|SpawnZombie|行|类型|X|是否魅惑";
+                            break;
+                        case "Mower": msg = p.Length > 3 ? Actions.ActionSpawnMower(I(p[2]), I(p[3])) : "用法: ACTION|Mower|行|类型"; break;
+                        case "ExportLineup": msg = Actions.ActionExportLineup(); break;
+                        case "ImportLineup": msg = p.Length > 2 ? Actions.ActionImportLineup(p[2]) : "缺少阵容码"; break;
+                        case "Zombies": msg = "场上僵尸 " + Actions.ZombieCount() + " 只"; break;
+                        case "Speed":
+                            if (p.Length > 2) { ModConfig.GameSpeed.Value = F(p[2]); msg = "游戏速度 = " + ModConfig.GameSpeed.Value; }
+                            else msg = "缺少倍率";
+                            break;
                         case "Fuse":
                             {
                                 // ACTION|Fuse|<伙伴类型号>  —— 让当前选中的植物和该伙伴直接融合

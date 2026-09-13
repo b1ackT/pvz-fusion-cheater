@@ -102,6 +102,14 @@ namespace PvzRhCheat
         public static ConfigEntry<bool>   ZombiesStopMoving;  // 僵尸速度归零
         public static ConfigEntry<bool>   AutoKillZombies;    // 自动秒杀新出现的僵尸
 
+        // ---- 对齐 Modified-Plus 的额外功能 ----
+        public static ConfigEntry<float>  GameSpeed;          // Time.timeScale
+        public static ConfigEntry<bool>   StopZombieSpawn;    // 停止出怪（BoardSpawner.SummonZombies）
+        public static ConfigEntry<bool>   ZombieInvincible;   // 僵尸无敌
+        public static ConfigEntry<float>  ZombieHpMultiplier; // 僵尸血量倍率
+        public static ConfigEntry<bool>   NoToolCooldown;     // 手套/锤子无冷却
+        public static ConfigEntry<bool>   UnlockAllPlants;    // 植物图鉴全解锁
+
         public static void Init(ConfigFile cfg)
         {
             Enabled  = Reg(cfg.Bind("0-General", "Enabled", true, "Master switch"), "Enabled");
@@ -156,6 +164,20 @@ namespace PvzRhCheat
             FreezeAllZombies  = Reg(cfg.Bind("8-Classic", "FreezeAllZombies", false, "Keep all zombies frozen"), "FreezeAllZombies");
             ZombiesStopMoving = Reg(cfg.Bind("8-Classic", "ZombiesStopMoving", false, "Zombie speed set to zero"), "ZombiesStopMoving");
             AutoKillZombies   = Reg(cfg.Bind("8-Classic", "AutoKillZombies", false, "Automatically kill zombies as they appear"), "AutoKillZombies");
+
+            // ---- 对齐 Modified-Plus 的额外功能（默认同样全关）----
+            GameSpeed        = Reg(cfg.Bind("9-Extra", "GameSpeed", 1.0f,
+                "Game speed (Time.timeScale). 1 = normal, 0.05-20"), "GameSpeed");
+            StopZombieSpawn  = Reg(cfg.Bind("9-Extra", "StopZombieSpawn", false,
+                "Stop new zombies from spawning (skips BoardSpawner.SummonZombies)"), "StopZombieSpawn");
+            ZombieInvincible = Reg(cfg.Bind("9-Extra", "ZombieInvincible", false,
+                "Zombies take no damage"), "ZombieInvincible");
+            ZombieHpMultiplier = Reg(cfg.Bind("9-Extra", "ZombieHpMultiplier", 1.0f,
+                "Zombie max HP multiplier. 1 = unchanged"), "ZombieHpMultiplier");
+            NoToolCooldown   = Reg(cfg.Bind("9-Extra", "NoToolCooldown", false,
+                "Glove and hammer have no cooldown"), "NoToolCooldown");
+            UnlockAllPlants  = Reg(cfg.Bind("9-Extra", "UnlockAllPlants", false,
+                "Unlock every plant in the almanac / plant pool"), "UnlockAllPlants");
         }
     }
 }

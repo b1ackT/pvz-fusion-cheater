@@ -84,25 +84,69 @@ namespace PvzRhCheat
         }
 
         /// <summary>按名字/编号筛选，返回命中的下标列表（filter 为空时返回全部）</summary>
-        internal static List<int> FilterTypes(string filter)
+        internal static List<int> FilterTypes(string filter, bool zombie)
         {
+            if (zombie) { BuildZombieTypes(); return Filter(_zids, _znms, filter); }
             BuildTypes();
-            var res = new List<int>(_tids.Length);
+            return Filter(_tids, _tnames, filter);
+        }
+
+        private static List<int> Filter(int[] ids, string[] nms, string filter)
+        {
+            var res = new List<int>(ids.Length);
             if (string.IsNullOrEmpty(filter))
             {
-                for (int i = 0; i < _tids.Length; i++) res.Add(i);
+                for (int i = 0; i < ids.Length; i++) res.Add(i);
                 return res;
             }
             string f = filter.Trim();
             int asId;
             bool numeric = int.TryParse(f, NumberStyles.Integer, CultureInfo.InvariantCulture, out asId);
-            for (int i = 0; i < _tids.Length; i++)
+            for (int i = 0; i < ids.Length; i++)
             {
-                if (numeric && _tids[i] == asId) { res.Add(i); continue; }
-                string cn = _tnames[i];
+                if (numeric && ids[i] == asId) { res.Add(i); continue; }
+                string cn = nms[i];
                 if (cn != null && cn.IndexOf(f, StringComparison.OrdinalIgnoreCase) >= 0) res.Add(i);
             }
             return res;
+        }
+
+        // ---------------------------------------------------------------- 僵尸类型表
+        private static int[] _zids;
+        private static string[] _znms;
+
+        internal static int ZombieTypeIdAt(int i) { BuildZombieTypes(); return (i >= 0 && i < _zids.Length) ? _zids[i] : -1; }
+        internal static string ZombieTypeNameAt(int i) { BuildZombieTypes(); return (i >= 0 && i < _znms.Length) ? _znms[i] : ""; }
+
+        private static void BuildZombieTypes()
+        {
+            if (_zids != null) return;
+            var ids = new List<int>(700);
+            var nms = new List<string>(700);
+            try
+            {
+                foreach (object o in Enum.GetValues(typeof(ZombieType)))
+                {
+                    int v = Convert.ToInt32(o);
+                    if (v < 0) continue;
+                    string cn = "";
+                    try { cn = Lawnf.GetName((ZombieType)v) ?? ""; } catch { }
+                    if (string.IsNullOrEmpty(cn)) cn = o.ToString();
+                    ids.Add(v);
+                    nms.Add(cn);
+                }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("[类型表] 僵尸枚举失败: " + e.Message); }
+            _zids = ids.ToArray();
+            _znms = nms.ToArray();
+            Plugin.Log.LogInfo("[类型表] 共 " + _zids.Length + " 种僵尸类型");
+        }
+
+        internal static string CnNameZombie(int typeId)
+        {
+            if (typeId < 0) return "";
+            try { return Lawnf.GetName((ZombieType)typeId) ?? ""; }
+            catch { return ""; }
         }
 
         // ---------------------------------------------------------------- 数值字段表

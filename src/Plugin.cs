@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using BepInEx;
 using BepInEx.Logging;
@@ -39,6 +39,8 @@ namespace PvzRhCheat
                 typeof(Patch_Abyss_GetTicket),    // 抽奖券拉满
                 typeof(Patch_Abyss_UseTicket),    // 抽奖券不消耗
                 typeof(Patch_Mouse_Update),       // 鼠标压在菜单上时不响应游戏点击
+                typeof(Patch_BoardSpawner_SummonZombies), // 停止出怪
+                typeof(Patch_Lawnf_GetGloveCD),           // 手套无冷却（独立路径）
             };
             foreach (Type t in patches) TryPatch(harmony, t);
 
