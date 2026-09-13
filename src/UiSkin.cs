@@ -185,9 +185,11 @@ namespace PvzRhCheat
         public static void DrawCheck(Rect box, Color c)
         {
             float s = Mathf.Min(box.width, box.height);
-            float cw = Mathf.Max(2f, Mathf.Round(s / 4.5f));     // 每个小方块的边长
-            Stroke(box, cw, 0.12f, 0.52f, 0.40f, 0.80f, c);      // 短臂
-            Stroke(box, cw, 0.36f, 0.80f, 0.88f, 0.22f, c);      // 长臂
+            // 小方块取 s/6：14px 的框里就是 2px 一格，勾形最干净
+            // （取 s/4.5 会变成 3px，关节处糊成一坨，实测对比过）
+            float cw = Mathf.Max(2f, Mathf.Round(s / 6f));
+            Stroke(box, cw, 0.14f, 0.50f, 0.40f, 0.78f, c);      // 短臂
+            Stroke(box, cw, 0.36f, 0.78f, 0.86f, 0.24f, c);      // 长臂
         }
 
         private static void Stroke(Rect box, float cw, float x0, float y0, float x1, float y1, Color c)
