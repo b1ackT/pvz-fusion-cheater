@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using BepInEx;
 using BepInEx.Logging;
@@ -14,7 +14,7 @@ namespace PvzRhCheat
     {
         public const string Guid = "com.dsh.pvzrh.cheat";
         /// <summary>界面标题栏上显示的版本戳，用来确认游戏里跑的是不是最新构建</summary>
-        public const string Version = "1.2.0";
+        public const string Version = "1.3.0";
         public static new ManualLogSource Log;
         public override void Load()
         {
@@ -50,7 +50,8 @@ namespace PvzRhCheat
             IpcBridge.Start();
             TryLaunchUi();
 
-            Log.LogInfo("PvZ 融合版修改器已加载（" + Version + "）—— 界面在游戏内，按 Insert 显示/隐藏菜单，F3 开关 ESP 方框");
+            Log.LogInfo("PvZ 融合版修改器已加载（" + Version + "）—— 界面在游戏内；按 " + ModConfig.MenuKeyCode()
+                      + " 显示/隐藏菜单，" + ModConfig.EspKeyCode() + " 开关 ESP 方框（热键可在「设置」页自定义）");
         }
 
         /// <summary>进游戏自动拉起独立窗口（已在运行则不重复启动）</summary>
