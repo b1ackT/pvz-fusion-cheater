@@ -1,0 +1,68 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    编译前需要先指定游戏目录（用于引用 BepInEx 与 Il2CppInterop 生成的互操作程序集）：
+      dotnet build -c Release -p:GameRoot="D:\Games\PlantsVsZombiesRH"
+    默认值假设本仓库放在 <游戏目录>\_mod\ 旁边，若不符请显式传 GameRoot。
+  -->
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>PvzRhCheat</AssemblyName>
+    <RootNamespace>PvzRhCheat</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Version>1.1.0</Version>
+    <NoWarn>$(NoWarn);CS0436</NoWarn>
+    <GameRoot Condition="'$(GameRoot)' == ''">$(MSBuildThisFileDirectory)..\..\</GameRoot>
+  </PropertyGroup>
+
+  <Target Name="CheckGameRoot" BeforeTargets="ResolveAssemblyReferences">
+    <Error Condition="!Exists('$(GameRoot)\BepInEx\core\BepInEx.Core.dll')"
+           Text="在 '$(GameRoot)' 下找不到 BepInEx。请先安装 BepInEx 6 (IL2CPP) 并至少运行游戏一次生成 BepInEx\interop，然后用 -p:GameRoot=&quot;你的游戏目录&quot; 指定路径。" />
+  </Target>
+
+  <ItemGroup>
+    <!-- BepInEx 6 运行时 -->
+    <Reference Include="BepInEx.Core">
+      <HintPath>$(GameRoot)\BepInEx\core\BepInEx.Core.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx.Unity.IL2CPP">
+      <HintPath>$(GameRoot)\BepInEx\core\BepInEx.Unity.IL2CPP.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="BepInEx.Unity.Common">
+      <HintPath>$(GameRoot)\BepInEx\core\BepInEx.Unity.Common.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(GameRoot)\BepInEx\core\0Harmony.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppInterop.Runtime">
+      <HintPath>$(GameRoot)\BepInEx\core\Il2CppInterop.Runtime.dll</HintPath><Private>false</Private>
+    </Reference>
+
+    <!-- 游戏互操作程序集（由 BepInEx 首次运行时生成） -->
+    <Reference Include="Assembly-CSharp">
+      <HintPath>$(GameRoot)\BepInEx\interop\Assembly-CSharp.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="Il2Cppmscorlib">
+      <HintPath>$(GameRoot)\BepInEx\interop\Il2Cppmscorlib.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppSystem">
+      <HintPath>$(GameRoot)\BepInEx\interop\Il2CppSystem.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="Il2CppSystem.Core">
+      <HintPath>$(GameRoot)\BepInEx\interop\Il2CppSystem.Core.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.CoreModule">
+      <HintPath>$(GameRoot)\BepInEx\interop\UnityEngine.CoreModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.IMGUIModule">
+      <HintPath>$(GameRoot)\BepInEx\interop\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.TextRenderingModule">
+      <HintPath>$(GameRoot)\BepInEx\interop\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>

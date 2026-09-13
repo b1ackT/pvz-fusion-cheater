@@ -1,0 +1,24 @@
+# 编译产物
+bin/
+obj/
+*.user
+*.suo
+.vs/
+packages/
+
+# 逆向分析产物（体积大 / 由游戏派生，不入库）
+_dump/
+*.dump.cs
+dump.cs
+il2cpp.h
+script.json
+stringliteral.json
+DummyDll/
+global-metadata.dat
+GameAssembly.dll
+*.nupkg
+nuget-local/
+
+# 本地环境
+*.log
+分析输出/
