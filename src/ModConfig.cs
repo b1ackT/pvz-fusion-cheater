@@ -86,6 +86,22 @@ namespace PvzRhCheat
         public static ConfigEntry<bool>   AbyssMaxTickets;
         public static ConfigEntry<bool>   AbyssInfiniteTickets;
 
+        // ---- ESP 外观 ----
+        public static ConfigEntry<int>    EspFontSize;
+        public static ConfigEntry<bool>   EspBold;
+        public static ConfigEntry<bool>   AutoLaunchUi;
+        /// <summary>游戏内菜单字号</summary>
+        public static ConfigEntry<int>    MenuFontSize;
+
+        // ---- 经典作弊 ----
+        public static ConfigEntry<bool>   AutoCollectSun;     // TreasureData.autoCollect
+        public static ConfigEntry<bool>   NoCardCooldown;     // CardUI.CD = 0
+        public static ConfigEntry<bool>   FreePlanting;       // CardUI.theSeedCost = 0
+        public static ConfigEntry<bool>   UnlimitedCardUse;   // CardUI.maxUsedTimes = 9999
+        public static ConfigEntry<bool>   FreezeAllZombies;   // 持续冻结全场
+        public static ConfigEntry<bool>   ZombiesStopMoving;  // 僵尸速度归零
+        public static ConfigEntry<bool>   AutoKillZombies;    // 自动秒杀新出现的僵尸
+
         public static void Init(ConfigFile cfg)
         {
             Enabled  = Reg(cfg.Bind("0-General", "Enabled", true, "Master switch"), "Enabled");
@@ -126,6 +142,20 @@ namespace PvzRhCheat
 
             AbyssMaxTickets       = Reg(cfg.Bind("6-Abyss", "AbyssMaxTickets", false, "Max out abyss lottery tickets"), "AbyssMaxTickets");
             AbyssInfiniteTickets  = Reg(cfg.Bind("6-Abyss", "AbyssInfiniteTickets", false, "Abyss tickets are never consumed"), "AbyssInfiniteTickets");
+
+            EspFontSize = Reg(cfg.Bind("7-ESP", "FontSize", 18, "ESP label font size (bigger = easier to read)"), "EspFontSize");
+            EspBold     = Reg(cfg.Bind("7-ESP", "Bold", true, "ESP label bold"), "EspBold");
+            MenuFontSize = Reg(cfg.Bind("7-ESP", "MenuFontSize", 14, "In-game menu font size (10-26)"), "MenuFontSize");
+            // 内置菜单已经覆盖全部功能，外置窗口默认不再自动弹出
+            AutoLaunchUi = Reg(cfg.Bind("7-ESP", "AutoLaunchUi", false, "Launch the standalone WinForms window at startup (not needed: the in-game menu has everything)"), "AutoLaunchUi");
+
+            AutoCollectSun    = Reg(cfg.Bind("8-Classic", "AutoCollectSun", false, "Auto collect sun and coins"), "AutoCollectSun");
+            NoCardCooldown    = Reg(cfg.Bind("8-Classic", "NoCardCooldown", false, "Seed cards never go on cooldown"), "NoCardCooldown");
+            FreePlanting      = Reg(cfg.Bind("8-Classic", "FreePlanting", false, "Seed cards cost 0 sun"), "FreePlanting");
+            UnlimitedCardUse  = Reg(cfg.Bind("8-Classic", "UnlimitedCardUse", false, "Seed cards have unlimited uses"), "UnlimitedCardUse");
+            FreezeAllZombies  = Reg(cfg.Bind("8-Classic", "FreezeAllZombies", false, "Keep all zombies frozen"), "FreezeAllZombies");
+            ZombiesStopMoving = Reg(cfg.Bind("8-Classic", "ZombiesStopMoving", false, "Zombie speed set to zero"), "ZombiesStopMoving");
+            AutoKillZombies   = Reg(cfg.Bind("8-Classic", "AutoKillZombies", false, "Automatically kill zombies as they appear"), "AutoKillZombies");
         }
     }
 }

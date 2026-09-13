@@ -15,8 +15,12 @@ namespace PvzRhCheat
         public bool AlwaysLightUp;    // alwaysLightUp 字段
         public bool Uncrashable;      // uncrashable 字段
 
+        // 换成别的植物（含融合体）：PlantType 枚举值，-1 = 不修改
+        public int   ThePlantType = -1;
+
         // 数值
         public int   MaxHealth      = -1;
+        public int   Health         = -1;
         public int   AttackDamage   = -1;
         public int   Level          = -1;
         public int   Stage          = -1;
@@ -41,7 +45,8 @@ namespace PvzRhCheat
 
         public bool HasAnything =>
             GodMode || Undead || Invincible || KeepShooting || AlwaysLightUp || Uncrashable ||
-            MaxHealth >= 0 || AttackDamage >= 0 || Level >= 0 || Stage >= 0 ||
+            ThePlantType >= 0 ||
+            MaxHealth >= 0 || Health >= 0 || AttackDamage >= 0 || Level >= 0 || Stage >= 0 ||
             AttackInterval >= 0f || Defence >= 0f ||
             Math.Abs(DamageMult - 1f) > 0.0001f || Math.Abs(SpeedMult - 1f) > 0.0001f ||
             SkinType >= 0 || Scale >= 0f ||
@@ -52,7 +57,8 @@ namespace PvzRhCheat
         public void Reset()
         {
             GodMode = Undead = Invincible = KeepShooting = AlwaysLightUp = Uncrashable = false;
-            MaxHealth = AttackDamage = Level = Stage = -1;
+            ThePlantType = -1;
+            MaxHealth = Health = AttackDamage = Level = Stage = -1;
             AttackInterval = Defence = -1f;
             DamageMult = SpeedMult = 1f;
             SkinType = -1; Scale = -1f;
@@ -101,13 +107,45 @@ namespace PvzRhCheat
 
         public static void ClearAll() { PerPlant.Clear(); BaseInterval.Clear(); BulletDone.Clear(); }
 
-        /// <summary>把全局 + 单株设置写进植物字段（幂等）</summary>
+        /// <summary>
+        /// 融合以后原来那株被销毁了，把用户为它设过的数值搬到新植物上。
+        /// ThePlantType 故意不搬（否则新植物会被立刻改回去）。
+        /// </summary>
+        public static void Transfer(Plant from, Plant to)
+        {
+            if (from == null || to == null) return;
+            try
+            {
+                PlantOverride s;
+                if (!PerPlant.TryGetValue(from.Pointer, out s) || s == null) return;
+
+                PlantOverride d = new PlantOverride
+                {
+                    GodMode = s.GodMode, Undead = s.Undead, Invincible = s.Invincible,
+                    KeepShooting = s.KeepShooting, AlwaysLightUp = s.AlwaysLightUp,
+                    Uncrashable = s.Uncrashable,
+                    ThePlantType = -1,
+                    MaxHealth = s.MaxHealth, Health = s.Health, AttackDamage = s.AttackDamage,
+                    Level = s.Level, Stage = s.Stage,
+                    AttackInterval = s.AttackInterval, Defence = s.Defence,
+                    DamageMult = s.DamageMult, SpeedMult = s.SpeedMult,
+                    SkinType = s.SkinType, Scale = s.Scale,
+                    BulletType = s.BulletType, BulletDamageMult = s.BulletDamageMult,
+                    BulletSpeedMult = s.BulletSpeedMult, BulletPierce = s.BulletPierce,
+                    BulletHitCount = s.BulletHitCount, Effects = s.Effects,
+                };
+                PerPlant[to.Pointer] = d;
+                try { ApplyOne(to, d); } catch { }
+            }
+            catch (Exception e) { Plugin.Log.LogWarning("[融合] 转移植物修改失败: " + e.Message); }
+        }
+
+        /// <summary>把该植物的单株设置写进字段（幂等）。已移除"全局默认"概念。</summary>
         public static void Apply(Plant p)
         {
             if (p == null) return;
-
-            if (GlobalEnabled) ApplyOne(p, Global);
-            if (PerPlant.TryGetValue(p.Pointer, out var ov)) ApplyOne(p, ov);
+            PlantOverride ov;
+            if (PerPlant.TryGetValue(p.Pointer, out ov)) ApplyOne(p, ov);
         }
 
         private static void ApplyOne(Plant p, PlantOverride o)
@@ -116,6 +154,20 @@ namespace PvzRhCheat
 
             try
             {
+                // 换植物 / 融合结果：直接改 thePlantType 并刷新外观
+                if (o.ThePlantType >= 0)
+                {
+                    try
+                    {
+                        if ((int)p.thePlantType != o.ThePlantType)
+                        {
+                            p.thePlantType = (PlantType)o.ThePlantType;
+                            try { p.ReplaceSprite(); } catch { }
+                        }
+                    }
+                    catch (Exception e) { Plugin.LogOnce("换植物类型", e); }
+                }
+
                 if (o.Invincible)    p.invincible = true;
                 if (o.Undead)        p.undead = true;
                 if (o.KeepShooting)  p.keepShooting = true;
@@ -127,6 +179,7 @@ namespace PvzRhCheat
                     p.thePlantMaxHealth = o.MaxHealth;
                     if (o.GodMode || p.thePlantHealth > o.MaxHealth) p.thePlantHealth = o.MaxHealth;
                 }
+                if (o.Health >= 0) p.thePlantHealth = o.Health;
                 if (o.AttackDamage >= 0) p.attackDamage = o.AttackDamage;
                 if (o.Level >= 0)        p.theLevel = o.Level;
                 if (o.Stage >= 0)        p.thePlantStage = o.Stage;
@@ -178,9 +231,9 @@ namespace PvzRhCheat
                 Plant from = null;
                 try { from = b.from; } catch { }
 
+                // 子弹覆盖改成只认单株设置
                 PlantOverride o = null;
                 if (from != null && PerPlant.TryGetValue(from.Pointer, out var per)) o = per;
-                if (o == null && GlobalEnabled) o = Global;
                 if (o == null || !o.HasAnything) return;
 
                 if (o.BulletType >= 0) b.theBulletType = (BulletType)o.BulletType;

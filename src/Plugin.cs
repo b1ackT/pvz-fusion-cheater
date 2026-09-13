@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using BepInEx;
 using BepInEx.Logging;
 using BepInEx.Unity.IL2CPP;
@@ -37,12 +38,49 @@ namespace PvzRhCheat
                 typeof(Patch_Advanture_OnInit),   // 天赋全解锁
                 typeof(Patch_Abyss_GetTicket),    // 抽奖券拉满
                 typeof(Patch_Abyss_UseTicket),    // 抽奖券不消耗
+                typeof(Patch_Mouse_Update),       // 鼠标压在菜单上时不响应游戏点击
             };
             foreach (Type t in patches) TryPatch(harmony, t);
 
             CreateOverlay();
+            IpcBridge.Start();
+            TryLaunchUi();
 
-            Log.LogInfo("PvZ 融合版修改器已加载（1.0.0）—— INSERT 显示/隐藏菜单，F3 切 ESP");
+            Log.LogInfo("PvZ 融合版修改器已加载（1.1.0）—— 界面在游戏内，按 Insert 显示/隐藏菜单，F3 开关 ESP 方框");
+        }
+
+        /// <summary>进游戏自动拉起独立窗口（已在运行则不重复启动）</summary>
+        private void TryLaunchUi()
+        {
+            if (!ModConfig.AutoLaunchUi.Value) { Log.LogInfo("[UI] 自动启动已关闭"); return; }
+            try
+            {
+                string root = Paths.GameRootPath;
+                string[] cands =
+                {
+                    Path.Combine(root, "_mod", "ui", "bin", "Release", "net6.0-windows", "PvzRhCheatUi.exe"),
+                    Path.Combine(root, "_mod", "ui", "bin", "Release", "PvzRhCheatUi.exe"),
+                    Path.Combine(root, "_mod", "ui", "PvzRhCheatUi.exe"),
+                };
+                string exe = null;
+                for (int i = 0; i < cands.Length; i++) if (File.Exists(cands[i])) { exe = cands[i]; break; }
+                if (exe == null) { Log.LogWarning("[UI] 找不到 PvzRhCheatUi.exe，未自动启动"); return; }
+
+                var running = System.Diagnostics.Process.GetProcessesByName("PvzRhCheatUi");
+                if (running != null && running.Length > 0) { Log.LogInfo("[UI] 独立窗口已在运行，跳过启动"); return; }
+
+                var psi = new System.Diagnostics.ProcessStartInfo(exe)
+                {
+                    UseShellExecute = true,
+                    WorkingDirectory = Path.GetDirectoryName(exe),
+                };
+                System.Diagnostics.Process.Start(psi);
+                Log.LogInfo("[UI] 已自动启动独立窗口");
+            }
+            catch (Exception e)
+            {
+                Log.LogWarning("[UI] 自动启动失败: " + e.GetType().Name + " " + e.Message);
+            }
         }
 
         private static readonly System.Collections.Generic.HashSet<string> _once =
@@ -55,17 +93,19 @@ namespace PvzRhCheat
             if (_once.Add(k)) Log?.LogWarning("[" + tag + "] " + e.GetType().Name + ": " + e.Message);
         }
 
-        /// <summary>注入并挂载 IMGUI 叠加层</summary>
+        /// <summary>注入并挂载 IMGUI 叠加层（ESP 方框 + 内置菜单）</summary>
         private void CreateOverlay()
         {
             try
             {
                 ClassInjector.RegisterTypeInIl2Cpp<EspOverlay>();
+                ClassInjector.RegisterTypeInIl2Cpp<MenuOverlay>();
                 var go = new GameObject("PvzRhCheatOverlay");
                 GameObject.DontDestroyOnLoad(go);
                 go.hideFlags = HideFlags.HideAndDontSave;
                 go.AddComponent<EspOverlay>();
-                Log.LogInfo("[UI] 叠加层已创建");
+                go.AddComponent<MenuOverlay>();
+                Log.LogInfo("[UI] 叠加层已创建（ESP + 内置菜单）");
             }
             catch (Exception e)
             {

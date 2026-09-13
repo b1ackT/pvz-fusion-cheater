@@ -60,6 +60,10 @@
     <Reference Include="UnityEngine.IMGUIModule">
       <HintPath>$(GameRoot)\BepInEx\interop\UnityEngine.IMGUIModule.dll</HintPath><Private>false</Private>
     </Reference>
+    <!-- 菜单用来判断"鼠标是否压在面板上"（Input.mousePosition），缺了会编译不过 -->
+    <Reference Include="UnityEngine.InputLegacyModule">
+      <HintPath>$(GameRoot)\BepInEx\interop\UnityEngine.InputLegacyModule.dll</HintPath><Private>false</Private>
+    </Reference>
     <Reference Include="UnityEngine.TextRenderingModule">
       <HintPath>$(GameRoot)\BepInEx\interop\UnityEngine.TextRenderingModule.dll</HintPath><Private>false</Private>
     </Reference>

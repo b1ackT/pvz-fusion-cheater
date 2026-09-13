@@ -34,6 +34,12 @@ namespace PvzRhCheat
             RefreshPlants();
             RefreshLevelInfo();
 
+            // 界面上点的"直接融合"在这里执行：不在 IMGUI 事件里动场景对象
+            try { RunPendingFuse(); } catch (Exception e) { LogSlow("FastTick/融合", e); }
+            // 融合会换掉植物对象，重新读一次列表
+            if (RefreshPlantsAgain()) RefreshPlants();
+
+            try { IpcBridge.Tick(); } catch (Exception e) { LogSlow("FastTick/ipc", e); }
             try { Tick(); } catch (Exception e) { LogSlow("FastTick/tick", e); }
 
             // 心跳诊断：每 5 秒记录一次，进关卡后日志里就能看到到底读到了什么
@@ -53,6 +59,107 @@ namespace PvzRhCheat
         }
 
         private static int _ticks;
+
+        // ---- 界面请求的"直接融合"（延迟到主循环里执行，避免在 IMGUI 事件中改场景）----
+        //
+        // 两阶段：
+        //   阶段 0  找到这株植物、算出融合结果、让它 Die 退场；
+        //   阶段 1  等格子腾空（Die 是异步的），再让游戏在空格子上**新建**结果植物。
+        // 只有新建出来的植物才带正确的模型/血量/子弹/技能。
+        private const int FuseIdle = 0, FuseEjecting = 1;
+        private static int _fuseStage = FuseIdle;
+        private static long _fusePtr;
+        private static int _fusePartner = -1;
+        private static int _fuseCol, _fuseRow, _fuseResult, _fuseTries;
+        private static float _fusePosX, _fusePosY;
+        private static string _fuseSelfName = "";
+        private static bool _fuseDirty;
+
+        internal static void RequestFuse(long plantPtr, int partnerType)
+        {
+            _fusePtr = plantPtr;
+            _fusePartner = partnerType;
+            _fuseStage = FuseIdle;
+            _fuseTries = 0;
+            _fuseDirty = false;
+        }
+
+        private static bool RefreshPlantsAgain() { bool d = _fuseDirty; _fuseDirty = false; return d; }
+
+        internal static void RunPendingFuse()
+        {
+            if (_fusePartner < 0) return;
+
+            if (_fuseStage == FuseIdle)
+            {
+                long ptr = _fusePtr;
+                int partner = _fusePartner;
+                Plant p = PlantByPtr(ptr);
+                if (p == null) { Finish("融合失败：那株植物已经不在场上了"); return; }
+
+                PlantDb.FusePlan plan;
+                string err = PlantDb.PlanFuse(p, partner, out plan);
+                if (err != null) { Finish("融合失败：" + err); return; }
+
+                // 记下位置（供阶段 1 在空格子上重建）
+                try { Vector3 wp = p.transform.position; _fusePosX = wp.x; _fusePosY = wp.y; } catch { }
+                _fuseCol = plan.Col; _fuseRow = plan.Row; _fuseResult = plan.ResultType;
+                _fusePtr = plan.OldPtr;
+                _fuseSelfName = plan.SelfName;
+                _fuseTries = 0;
+
+                MenuUI.SetStatus("正在融合：" + plan.SelfName + " + " + PlantDb.CnName(partner) + " → "
+                               + PlantDb.CnName(plan.ResultType) + " …（先让原植物退场）");
+
+                err = PlantDb.EjectOld(p);
+                if (err != null) { Finish("融合失败：" + err); return; }
+                _fuseStage = FuseEjecting;
+                return;
+            }
+
+            // 阶段 1：等格子空出来
+            _fuseTries++;
+            Plant still = PlantDb.CellPlant(_fuseCol, _fuseRow);
+            if (still != null && _fuseTries < 8) return;    // 再等一个周期（0.25 秒）
+
+            string how;
+            if (still == null)
+            {
+                Plant created;
+                string e2 = PlantDb.SpawnAt(_fuseCol, _fuseRow, _fuseResult,
+                    new Vector2(_fusePosX, _fusePosY), out created);
+                if (e2 == null && created != null)
+                {
+                    PlantDb.FinishNewPlant(_fusePtr, created);
+                    how = "腾空格子后由游戏新建（模型/属性完整）";
+                    Finish("融合成功：" + _fuseSelfName + " + " + PlantDb.CnName(_fusePartner) + " → "
+                         + PlantDb.Label(created) + "   方式:" + how);
+                    return;
+                }
+                how = "重建失败 " + e2;
+            }
+            else
+            {
+                how = "格子一直没腾空（Die 是异步的），改用原地改名";
+            }
+
+            // 兜底：原地改类型（模型可能不跟着换）
+            Plant back = PlantDb.CellPlant(_fuseCol, _fuseRow);
+            string e3 = PlantDb.InPlaceChange(back, _fuseResult);
+            _fuseDirty = true;
+            Finish(e3 == null
+                ? ("融合成功（降级）：" + _fuseSelfName + " → " + PlantDb.CnName(_fuseResult) + "，但可能只是改了类型（" + how + "）")
+                : ("融合失败：" + how + "；" + e3));
+        }
+
+        private static void Finish(string msg)
+        {
+            _fusePartner = -1;
+            _fuseStage = FuseIdle;
+            _fuseDirty = true;
+            MenuUI.SetStatus(msg);
+            Plugin.Log.LogInfo("[融合] " + msg);
+        }
         private static float _nextHeartbeat;
         private static int _heartbeatLogs;
 
@@ -81,10 +188,11 @@ namespace PvzRhCheat
         }
 
         /// <summary>
-        /// 植物来源优先级：
-        ///  1) Board.Instance.boardEntity.plantArray  ← 游戏自己的权威列表，覆盖所有关卡类型
-        ///  2) boardEntity.hiddenPlants
-        ///  3) 非泛型 FindObjectsOfType(Il2CppType) 兜底（泛型版在 IL2CPP 下可能静默返回空）
+        /// 多来源逐个尝试，并记录**每个来源各找到几只**，方便定位哪条路通：
+        ///  A) Lawnf.GetAllPlants()                ← 游戏自己的"取全部植物"接口
+        ///  B) Board.boardEntity.plantArray / hiddenPlants
+        ///  C) 非泛型 FindObjectsOfType(Il2CppType) ← 泛型版在 IL2CPP 下可能静默返回空
+        ///  另记录 Lawnf.GetPlantCount(Board) 作为游戏侧的校验值
         /// </summary>
         internal static void RefreshPlants()
         {
@@ -92,75 +200,137 @@ namespace PvzRhCheat
             _seen.Clear();
             _gardenCount = 0;
 
-            bool fromBoard = false;
+            int nA = 0, nB = 0, nC = 0, nD = 0;
+            int gameCount = -1;
+            bool boardNull = true, entityNull = true;
+
+            // A) Lawnf.GetAllPlants() —— 注意它有时会抛 NullReferenceException，必须单独包住
+            try
+            {
+                var list = Lawnf.GetAllPlants();
+                if (list != null)
+                    for (int i = 0; i < list.Count; i++) AddOne(list[i]);
+            }
+            catch (Exception e) { LogSlow("plants/Lawnf.GetAllPlants", e); }
+            nA = _plants.Count;
+
+            // B) Board.boardEntity
             try
             {
                 Board b = Board.Instance;
                 if (b != null)
                 {
+                    boardNull = false;
                     BoardEntity be = b.boardEntity;
                     if (be != null)
                     {
+                        entityNull = false;
                         AddPlants(be.plantArray);
                         AddPlants(be.hiddenPlants);
+                        AddPlants(be.plantHead);
+                        // 按类型分组的全部植物
                         try
                         {
-                            var gp = be.gardenPlants;
-                            if (gp != null) _gardenCount = gp.Count;
+                            var heads = be.plantHeads;
+                            if (heads != null)
+                                foreach (var kv in heads) AddPlants(kv.Value);
                         }
-                        catch { }
-                        fromBoard = _plants.Count > 0;
+                        catch (Exception e) { LogSlow("plants/plantHeads", e); }
+                        try { var gp = be.gardenPlants; if (gp != null) _gardenCount = gp.Count; } catch { }
                     }
+                    try { gameCount = Lawnf.GetPlantCount(b); } catch { }
                 }
             }
             catch (Exception e) { LogSlow("plants/boardEntity", e); }
+            nB = _plants.Count - nA;
 
-            if (_plants.Count == 0)
+            // C) 非泛型兜底
+            try
             {
-                // 兜底：非泛型调用（不依赖泛型实例化是否被裁剪）
-                try
+                var arr = UnityEngine.Object.FindObjectsOfType(
+                    Il2CppInterop.Runtime.Il2CppType.Of<Plant>());
+                int before = _plants.Count;
+                if (arr != null)
                 {
-                    var arr = UnityEngine.Object.FindObjectsOfType(
-                        Il2CppInterop.Runtime.Il2CppType.Of<Plant>());
-                    if (arr != null)
+                    for (int i = 0; i < arr.Length; i++)
                     {
-                        for (int i = 0; i < arr.Length; i++)
-                        {
-                            var o = arr[i];
-                            if (o == null) continue;
-                            Plant p = null;
-                            try { p = o.TryCast<Plant>(); } catch { }
-                            if (p == null) { try { p = new Plant(o.Pointer); } catch { } }
-                            AddOne(p);
-                        }
+                        var o = arr[i];
+                        if (o == null) continue;
+                        Plant p = null;
+                        try { p = o.TryCast<Plant>(); } catch { }
+                        if (p == null) { try { p = new Plant(o.Pointer); } catch { } }
+                        AddOne(p);
                     }
-                    if (_plants.Count > 0) fromBoard = false;
                 }
-                catch (Exception e) { LogSlow("plants/fallbackNonGeneric", e); }
+                nC = _plants.Count - before;
             }
+            catch (Exception e) { LogSlow("plants/findNonGeneric", e); }
 
+            // D) Lawnf.GetPlantsByRow(board, row) —— 只要行号，不依赖类型/坐标，最稳的一条
+            try
+            {
+                Board b = Board.Instance;
+                if (b != null)
+                {
+                    int before = _plants.Count;
+                    for (int row = 0; row < 8; row++)
+                    {
+                        try { AddPlants(Lawnf.GetPlantsByRow(b, row)); }
+                        catch { }
+                    }
+                    nD = _plants.Count - before;
+                }
+            }
+            catch (Exception e) { LogSlow("plants/GetPlantsByRow", e); }
+
+            // E) 网格兜底：Lawnf.GetPlant(列, 行, Board) 逐格问一次。
+            //    只在前面全部落空时才跑，避免每 0.25 秒做几十次 native 调用。
+            int nE = 0;
             if (_plants.Count == 0)
             {
                 try
                 {
-                    var arr = UnityEngine.Object.FindObjectsOfType<Plant>();
-                    if (arr != null)
-                        for (int i = 0; i < arr.Length; i++) AddOne(arr[i]);
+                    Board b = Board.Instance;
+                    if (b != null)
+                    {
+                        for (int row = 0; row < 7; row++)
+                            for (int col = 0; col < 9; col++)
+                            {
+                                try { AddOne(Lawnf.GetPlant(col, row, b)); }
+                                catch { }
+                            }
+                    }
                 }
-                catch (Exception e) { LogSlow("plants/fallbackGeneric", e); }
+                catch (Exception e) { LogSlow("plants/grid", e); }
+                nE = _plants.Count;
             }
 
-            _plantSource = fromBoard ? "board" : (_plants.Count > 0 ? "find" : "none");
+            // 实测优先级：Lawnf.GetAllPlants 最准（在关卡内可用，主菜单时会抛异常，已单独包住）
+            _plantSource = nA > 0 ? "Lawnf" : (nD > 0 ? "byRow" : (nB > 0 ? "board" : (nC > 0 ? "find" : (nE > 0 ? "grid" : "none"))));
+            _srcLawnf = nA; _srcBoard = nB; _srcFind = nC; _srcByRow = nD; _srcGrid = nE; _gamePlantCount = gameCount;
 
-            if (!_plantsLogged && _plants.Count > 0)
+            // 数量或来源变化时打一行，便于定位
+            string sig = nA + "/" + nB + "/" + nC + "/" + nD + "/" + nE + "/" + gameCount + "/" + boardNull + entityNull;
+            if (sig != _plantSig)
             {
-                _plantsLogged = true;
-                Plugin.Log.LogInfo("[植物] 来源=" + _plantSource + " 数量=" + _plants.Count +
-                                   " 花园植物=" + _gardenCount + " 关卡=" + _levelInfo);
+                _plantSig = sig;
+                if (!boardNull || nA > 0 || nD > 0 || nE > 0 || gameCount > 0)
+                    Plugin.Log.LogInfo(string.Format(
+                        "[植物] 来源={0} 合计={1}  | Lawnf={2} byRow={3} board={4} find={5} grid={6}  游戏侧计数={7}  Board为空={8} boardEntity为空={9} 花园={10} 关卡={11}",
+                        _plantSource, _plants.Count, nA, nD, nB, nC, nE, gameCount, boardNull, entityNull, _gardenCount, _levelInfo));
             }
         }
 
-        private static bool _plantsLogged;
+        private static string _plantSig = "";
+        private static int _srcLawnf, _srcBoard, _srcFind, _srcByRow, _srcGrid, _gamePlantCount;
+
+        internal static int SrcLawnf() { return _srcLawnf; }
+        internal static int SrcBoard() { return _srcBoard; }
+        internal static int SrcFind() { return _srcFind; }
+        internal static int SrcByRow() { return _srcByRow; }
+        internal static int SrcGrid() { return _srcGrid; }
+        internal static int GamePlantCount() { return _gamePlantCount; }
+
         private static bool _noPlantLogged;
 
         private static void AddPlants(Il2CppSystem.Collections.Generic.List<Plant> list)
@@ -228,6 +398,94 @@ namespace PvzRhCheat
 
         internal static System.Collections.Generic.List<Plant> PlantsSnapshot() { return _plants; }
 
+        // ---- 融合配方（游戏自己的融合表：PlantMixTreeManager.GetTree(type).Recipes = 伙伴->结果）----
+        private static int _recipeFor = -2;
+        private static readonly System.Collections.Generic.List<int> _recipeFlat =
+            new System.Collections.Generic.List<int>();
+
+        internal static System.Collections.Generic.List<int> RecipeFlat() { return _recipeFlat; }
+
+        internal static void InvalidateRecipes() { _recipeFor = -2; }
+
+        internal static void EnsureRecipes(int curType)
+        {
+            if (_recipeFor == curType) return;
+            _recipeFor = curType;
+            _recipeFlat.Clear();
+            if (curType < 0) return;
+            try
+            {
+                PlantMixTreeNode node = PlantMixTreeManager.GetTree((PlantType)curType);
+                if (node == null) { Plugin.Log.LogInfo("[融合] GetTree 返回 null: " + curType); return; }
+                var rec = node.Recipes;
+                if (rec == null) { Plugin.Log.LogInfo("[融合] Recipes 为 null: " + curType); return; }
+                foreach (var kv in rec)
+                {
+                    _recipeFlat.Add((int)kv.Key);
+                    _recipeFlat.Add((int)kv.Value);
+                }
+                Plugin.Log.LogInfo("[融合] 类型 " + curType + " 配方数 = " + (_recipeFlat.Count / 2));
+            }
+            catch (Exception e) { LogSlow("recipes/" + curType, e); }
+        }
+
+        internal static string RecipesJson()
+        {
+            int t = -1;
+            try { if (_selected != null) t = (int)_selected.thePlantType; } catch { }
+            if (t < 0) return "[]";
+            EnsureRecipes(t);
+            var sb = new System.Text.StringBuilder(512);
+            sb.Append('[');
+            for (int i = 0; i + 1 < _recipeFlat.Count; i += 2)
+            {
+                if (i > 0) sb.Append(',');
+                sb.Append('[').Append(_recipeFlat[i]).Append(',').Append(_recipeFlat[i + 1]).Append(']');
+            }
+            sb.Append(']');
+            return sb.ToString();
+        }
+
+        internal static int SelectedIndex()
+        {
+            if (_selected == null) return -1;
+            try
+            {
+                for (int i = 0; i < _plants.Count; i++)
+                    if (_plants[i] != null && _plants[i].Pointer == _selected.Pointer) return i;
+            }
+            catch { }
+            return -1;
+        }
+
+        // ---- 用指针寻址：植物列表每 0.25 秒重建，索引会变，指针稳定 ----
+        internal static long SelectedPtr()
+        {
+            try { return _selected == null ? 0L : _selected.Pointer.ToInt64(); } catch { return 0L; }
+        }
+
+        internal static Plant PlantByPtr(long ptr)
+        {
+            if (ptr == 0L) return null;
+            try
+            {
+                for (int i = 0; i < _plants.Count; i++)
+                {
+                    Plant p = _plants[i];
+                    if (p == null) continue;
+                    if (p.Pointer.ToInt64() == ptr) return p;
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        internal static void SelectByPtr(long ptr)
+        {
+            Plant p = PlantByPtr(ptr);
+            if (p != null) _selected = p;
+        }
+
         internal static void Select(Plant p) { _selected = p; }
 
         internal static Plant SelectedPlant() { return _selected; }
@@ -262,6 +520,7 @@ namespace PvzRhCheat
             Step(RestorePlants,       nameof(RestorePlants));
             Step(ApplyPlantOverrides, nameof(ApplyPlantOverrides));
             Step(TravelTweaks,        nameof(TravelTweaks));
+            Step(ClassicCheats,       nameof(ClassicCheats));
 
             if (!_loggedOnce)
             {
@@ -345,7 +604,124 @@ namespace PvzRhCheat
             }
         }
 
-        // ------------------------------------------------------------------ 植物覆盖（UI 编辑器写入）
+        // ================================================================== 经典作弊
+        /// <summary>周期性的经典作弊（自动收集 / 免费种植 / 无冷却 / 冻结等）</summary>
+        internal static void ClassicCheats()
+        {
+            try { if (ModConfig.AutoCollectSun.Value) TreasureData.autoCollect = true; }
+            catch (Exception e) { LogSlow("cheat/autoCollect", e); }
+
+            if (ModConfig.NoCardCooldown.Value || ModConfig.FreePlanting.Value || ModConfig.UnlimitedCardUse.Value)
+                TweakCards();
+
+            if (ModConfig.FreezeAllZombies.Value) ForEachZombie(FreezeOne);
+            if (ModConfig.ZombiesStopMoving.Value) ForEachZombie(StopOne);
+            if (ModConfig.AutoKillZombies.Value) ForEachZombie(KillOne);
+        }
+
+        /// <summary>用非泛型 FindObjectsOfType，避免泛型实例化被裁剪时静默返回空</summary>
+        private static Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<UnityEngine.Object>
+            FindAll(Type t)
+        {
+            try { return UnityEngine.Object.FindObjectsOfType(Il2CppInterop.Runtime.Il2CppType.From(t)); }
+            catch (Exception e) { LogSlow("FindAll/" + t.Name, e); return null; }
+        }
+
+        private static void ForEachZombie(Action<Zombie> fn)
+        {
+            var arr = FindAll(typeof(Zombie));
+            if (arr == null) return;
+            for (int i = 0; i < arr.Length; i++)
+            {
+                var o = arr[i];
+                if (o == null) continue;
+                Zombie z = null;
+                try { z = o.TryCast<Zombie>(); } catch { }
+                if (z == null) continue;
+                try { fn(z); } catch { }
+            }
+        }
+
+        private static void FreezeOne(Zombie z) { try { z.SetFreeze(30f, 3); } catch { } }
+        private static void StopOne(Zombie z) { try { z.theSpeed = 0f; } catch { } }
+        private static void KillOne(Zombie z) { try { z.Die(0); } catch { } }
+
+        private static void TweakCards()
+        {
+            var arr = FindAll(typeof(CardUI));
+            if (arr == null) return;
+            for (int i = 0; i < arr.Length; i++)
+            {
+                var o = arr[i];
+                if (o == null) continue;
+                CardUI c = null;
+                try { c = o.TryCast<CardUI>(); } catch { }
+                if (c == null) continue;
+                try
+                {
+                    if (ModConfig.NoCardCooldown.Value) c.CD = 0f;
+                    if (ModConfig.FreePlanting.Value) c.theSeedCost = 0;
+                    if (ModConfig.UnlimitedCardUse.Value) c.maxUsedTimes = 9999;
+                }
+                catch { }
+            }
+        }
+
+        // ---- 一次性动作（由 UI 按钮 / IPC 触发）----
+        internal static string ActionKillAllZombies()
+        {
+            int n = 0;
+            ForEachZombie(z => { try { z.Die(0); n++; } catch { } });
+            Plugin.Log.LogInfo("[作弊] 秒杀僵尸 " + n + " 只");
+            return "秒杀僵尸 " + n + " 只";
+        }
+
+        internal static string ActionNextWave()
+        {
+            try
+            {
+                Board b = Board.Instance;
+                if (b == null) return "不在关卡内";
+                b.EnterNextRound();
+                Plugin.Log.LogInfo("[作弊] 已跳到下一波");
+                return "已跳到下一波";
+            }
+            catch (Exception e) { LogSlow("cheat/nextWave", e); return "下一波失败: " + e.Message; }
+        }
+
+        internal static string ActionSetSun(int value)
+        {
+            try
+            {
+                Board b = Board.Instance;
+                if (b == null) return "不在关卡内";
+                b.SetSun(value);
+                return "阳光设为 " + value;
+            }
+            catch (Exception e) { LogSlow("cheat/setSun", e); return "设置阳光失败"; }
+        }
+
+        internal static string ActionTriggerMowers()
+        {
+            int n = 0;
+            try
+            {
+                Board b = Board.Instance;
+                if (b == null || b.mowerArray == null) return "不在关卡内";
+                for (int i = 0; i < b.mowerArray.Count; i++)
+                {
+                    try
+                    {
+                        var m = b.mowerArray[i];
+                        if (m != null && !m.started) { m.StartMove(); n++; }
+                    }
+                    catch { }
+                }
+            }
+            catch (Exception e) { LogSlow("cheat/mower", e); }
+            return "触发割草机 " + n + " 台";
+        }
+
         internal static void ApplyPlantOverrides()
         {
             for (int i = 0; i < _plants.Count; i++) Overrides.Apply(_plants[i]);
