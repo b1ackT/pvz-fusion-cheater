@@ -22,3 +22,7 @@ nuget-local/
 # 本地环境
 *.log
 分析输出/
+
+# 绝对不要提交令牌
+.gh_token
+*.token

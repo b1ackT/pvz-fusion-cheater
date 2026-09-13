@@ -27,13 +27,22 @@
 对所有植物统一生效的修改，和单株设置叠加（单株优先）。
 
 ### PLANTS
-- **LIVE PLANTS 列表**：场景中每株植物一行（`#序号 类型名 血量`），点一行进入编辑
+- **LIVE PLANTS 列表**：每株植物一行（`#序号 类型名 行列 血量`），点一行进入编辑
+- 顶部显示**当前关卡类型**与植物数据来源，用来判断为什么列表为空
 - **编辑页**：机制（免伤/invincible/undead/keepShooting/alwaysLightUp/uncrashable）、
   数值（最大生命/攻击力/等级/攻击间隔/攻速倍率/伤害倍率/防御）、
   模型（skinType/缩放 + 「Refresh sprite now」）、
   子弹（BulletType id / 子弹伤害倍率 / 子弹速度倍率 / 穿透）
 - 「Copy this to GLOBAL defaults」把当前这株的设置变成全场默认
 - 「Reset this plant」清掉这株的覆盖
+
+> **植物从哪来**：读取游戏自己的权威列表 `Board.Instance.boardEntity.plantArray`（+ `hiddenPlants`），
+> 而不是 `FindObjectsOfType`——后者在 IL2CPP 下泛型实例化可能不存在，会**静默返回空数组**。
+> 因为走板子的列表，**所有关卡类型都适用**（冒险/挑战/IZ/生存/探索/旅行/皮肤/深渊/新冒险/塔/星冒险/自定义）。
+> 花园模式用的是 `GardenPlant`（不同类型），UI 会明确提示不支持。
+>
+> **关卡类型**：`GameAPP.theBoardType`（`LevelType`）+ `Board.sceneType`（`SceneType`），
+> 显示在底栏与植物页顶部，并写入日志心跳。
 
 ### ESP / KEYS
 ESP 显示项（方框/名字/血量/序号）、标签高度与宽度、热键说明、清空全部单株覆盖。
@@ -179,6 +188,20 @@ f.HasCharacter('\u2714')   // ✔
 实测这台机器上 `LegacyRuntime` 就有 `✓`，所以直接用字形，**清晰不发糊**
 （早期版本用一堆小方块手绘对勾，会糊，已废弃）。
 另外所有矩形都 `Mathf.Round` 取整到整像素，避免亚像素采样发虚。
+
+### 5.5 注入类型的签名限制
+
+Il2CppInterop 会尝试把注入类型（`EspOverlay`）的**所有方法**转成 il2cpp 可调用的形式。
+遇到它无法转换的签名，会在注册时告警，并在调用时抛 `NotSupportedException`：
+
+```
+Method System.String[] TabNames() ... has unsupported return type System.String[]
+Method Void TextRow(..., ConfigEntry`1[System.String]) ... unsupported parameter
+```
+
+**规则：注入类型的方法签名里不要出现数组返回值、委托、第三方泛型类型。**
+已改为内联数组、传/返 `string`。排查时看启动日志里的
+`has unsupported return type/parameter` 即可。
 
 ### 5.4 中文可用性实测
 

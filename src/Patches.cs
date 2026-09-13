@@ -14,12 +14,16 @@ namespace PvzRhCheat
         private static bool _warnedEmptyPool;
         private static bool _loggedOnce;
 
-        // 主线程维护的植物列表/选中项（外置 UI 通过索引寻址）
+        // 主线程维护的植物列表/选中项
         private static readonly System.Collections.Generic.List<Plant> _plants =
             new System.Collections.Generic.List<Plant>();
+        private static readonly System.Collections.Generic.HashSet<IntPtr> _seen = new System.Collections.Generic.HashSet<IntPtr>();
         private static Plant _selected;
+        private static string _levelInfo = "?";
+        private static int _gardenCount;
+        private static string _plantSource = "none";
 
-        /// <summary>每帧调用：刷新植物列表、处理外置 UI 指令、更新快照</summary>
+        /// <summary>每帧调用：刷新植物列表 + 周期施加</summary>
         internal static void FastTick()
         {
             if (!ModConfig.Enabled.Value) return;
@@ -27,17 +31,188 @@ namespace PvzRhCheat
             if (now < _nextFast) return;
             _nextFast = now + 0.25f;
 
-            try
-            {
-                _plants.Clear();
-                var arr = UnityEngine.Object.FindObjectsOfType<Plant>();
-                if (arr != null)
-                    for (int i = 0; i < arr.Length; i++) if (arr[i] != null) _plants.Add(arr[i]);
-            }
-            catch (Exception e) { LogSlow("FastTick/plants", e); }
+            RefreshPlants();
+            RefreshLevelInfo();
 
             try { Tick(); } catch (Exception e) { LogSlow("FastTick/tick", e); }
+
+            // 心跳诊断：每 5 秒记录一次，进关卡后日志里就能看到到底读到了什么
+            _ticks++;
+            if (now >= _nextHeartbeat)
+            {
+                _nextHeartbeat = now + 5f;
+                if (Actions.IsInLevel() && _heartbeatLogs < 60)
+                {
+                    _heartbeatLogs++;
+                    Plugin.Log.LogInfo(string.Format(
+                        "[心跳] 关卡={0} 来源={1} 植物={2} 花园={3} 子弹={4} 僵尸排数={5}",
+                        _levelInfo, _plantSource, _plants.Count, _gardenCount,
+                        BulletCount(), ZombieRows()));
+                }
+            }
         }
+
+        private static int _ticks;
+        private static float _nextHeartbeat;
+        private static int _heartbeatLogs;
+
+        private static int BulletCount()
+        {
+            try
+            {
+                Board b = Board.Instance;
+                if (b == null || b.boardEntity == null) return -1;
+                var l = b.boardEntity.bulletArray;
+                return l == null ? -1 : l.Count;
+            }
+            catch { return -1; }
+        }
+
+        private static int ZombieRows()
+        {
+            try
+            {
+                Board b = Board.Instance;
+                if (b == null || b.boardEntity == null) return -1;
+                var d = b.boardEntity.waveZombies;
+                return d == null ? -1 : d.Count;
+            }
+            catch { return -1; }
+        }
+
+        /// <summary>
+        /// 植物来源优先级：
+        ///  1) Board.Instance.boardEntity.plantArray  ← 游戏自己的权威列表，覆盖所有关卡类型
+        ///  2) boardEntity.hiddenPlants
+        ///  3) 非泛型 FindObjectsOfType(Il2CppType) 兜底（泛型版在 IL2CPP 下可能静默返回空）
+        /// </summary>
+        internal static void RefreshPlants()
+        {
+            _plants.Clear();
+            _seen.Clear();
+            _gardenCount = 0;
+
+            bool fromBoard = false;
+            try
+            {
+                Board b = Board.Instance;
+                if (b != null)
+                {
+                    BoardEntity be = b.boardEntity;
+                    if (be != null)
+                    {
+                        AddPlants(be.plantArray);
+                        AddPlants(be.hiddenPlants);
+                        try
+                        {
+                            var gp = be.gardenPlants;
+                            if (gp != null) _gardenCount = gp.Count;
+                        }
+                        catch { }
+                        fromBoard = _plants.Count > 0;
+                    }
+                }
+            }
+            catch (Exception e) { LogSlow("plants/boardEntity", e); }
+
+            if (_plants.Count == 0)
+            {
+                // 兜底：非泛型调用（不依赖泛型实例化是否被裁剪）
+                try
+                {
+                    var arr = UnityEngine.Object.FindObjectsOfType(
+                        Il2CppInterop.Runtime.Il2CppType.Of<Plant>());
+                    if (arr != null)
+                    {
+                        for (int i = 0; i < arr.Length; i++)
+                        {
+                            var o = arr[i];
+                            if (o == null) continue;
+                            Plant p = null;
+                            try { p = o.TryCast<Plant>(); } catch { }
+                            if (p == null) { try { p = new Plant(o.Pointer); } catch { } }
+                            AddOne(p);
+                        }
+                    }
+                    if (_plants.Count > 0) fromBoard = false;
+                }
+                catch (Exception e) { LogSlow("plants/fallbackNonGeneric", e); }
+            }
+
+            if (_plants.Count == 0)
+            {
+                try
+                {
+                    var arr = UnityEngine.Object.FindObjectsOfType<Plant>();
+                    if (arr != null)
+                        for (int i = 0; i < arr.Length; i++) AddOne(arr[i]);
+                }
+                catch (Exception e) { LogSlow("plants/fallbackGeneric", e); }
+            }
+
+            _plantSource = fromBoard ? "board" : (_plants.Count > 0 ? "find" : "none");
+
+            if (!_plantsLogged && _plants.Count > 0)
+            {
+                _plantsLogged = true;
+                Plugin.Log.LogInfo("[植物] 来源=" + _plantSource + " 数量=" + _plants.Count +
+                                   " 花园植物=" + _gardenCount + " 关卡=" + _levelInfo);
+            }
+        }
+
+        private static bool _plantsLogged;
+        private static bool _noPlantLogged;
+
+        private static void AddPlants(Il2CppSystem.Collections.Generic.List<Plant> list)
+        {
+            if (list == null) return;
+            int n = list.Count;
+            for (int i = 0; i < n; i++) AddOne(list[i]);
+        }
+
+        private static void AddOne(Plant p)
+        {
+            if (p == null) return;
+            IntPtr key;
+            try { key = p.Pointer; } catch { return; }
+            if (key == IntPtr.Zero) return;
+            if (!_seen.Add(key)) return;
+            _plants.Add(p);
+        }
+
+        /// <summary>读取当前关卡类型（LevelType + SceneType）</summary>
+        internal static void RefreshLevelInfo()
+        {
+            var sb = new System.Text.StringBuilder(48);
+            try
+            {
+                sb.Append(GameAPP.theBoardType.ToString());
+                sb.Append(" Lv").Append(GameAPP.theBoardLevel);
+            }
+            catch { sb.Append("?"); }
+            try
+            {
+                Board b = Board.Instance;
+                if (b != null) sb.Append(" / ").Append(b.sceneType.ToString());
+            }
+            catch { }
+            _levelInfo = sb.ToString();
+
+            if (!_noPlantLogged && _plants.Count == 0 && IsInLevel())
+            {
+                _noPlantLogged = true;
+                Plugin.Log.LogInfo("[植物] 当前在关卡中但植物列表为空（关卡=" + _levelInfo + "）");
+            }
+        }
+
+        internal static bool IsInLevel()
+        {
+            try { return Board.Instance != null; } catch { return false; }
+        }
+
+        internal static string LevelInfo() { return _levelInfo; }
+        internal static int GardenCount() { return _gardenCount; }
+        internal static string PlantSource() { return _plantSource; }
 
         private static readonly System.Collections.Generic.HashSet<string> _slowLogged =
             new System.Collections.Generic.HashSet<string>();
@@ -54,6 +229,8 @@ namespace PvzRhCheat
         internal static System.Collections.Generic.List<Plant> PlantsSnapshot() { return _plants; }
 
         internal static void Select(Plant p) { _selected = p; }
+
+        internal static Plant SelectedPlant() { return _selected; }
 
         internal static void SelectByIndex(int index) { _selected = PlantAt(index); }
 
@@ -155,11 +332,9 @@ namespace PvzRhCheat
         internal static void RestorePlants()
         {
             if (!ModConfig.GodModePlants.Value) return;
-            var plants = UnityEngine.Object.FindObjectsOfType<Plant>();
-            if (plants == null) return;
-            for (int i = 0; i < plants.Length; i++)
+            for (int i = 0; i < _plants.Count; i++)
             {
-                Plant p = plants[i];
+                Plant p = _plants[i];
                 if (p == null) continue;
                 try
                 {
@@ -173,9 +348,7 @@ namespace PvzRhCheat
         // ------------------------------------------------------------------ 植物覆盖（UI 编辑器写入）
         internal static void ApplyPlantOverrides()
         {
-            var plants = UnityEngine.Object.FindObjectsOfType<Plant>();
-            if (plants == null) return;
-            for (int i = 0; i < plants.Length; i++) Overrides.Apply(plants[i]);
+            for (int i = 0; i < _plants.Count; i++) Overrides.Apply(_plants[i]);
         }
 
         // ------------------------------------------------------------------ 旅行模式强化

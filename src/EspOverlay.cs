@@ -30,12 +30,13 @@ namespace PvzRhCheat
         public static float EspHeight = 0.75f;
         public static float EspWidth  = 100f;
 
-        private Rect  _win = new Rect(40f, 40f, 580f, 600f);
+        private Rect  _win = new Rect(40f, 40f, 740f, 680f);
         private int   _tab;
         private float _scroll;
+        private float _contentH = 0f;     // 上一帧实测的内容总高（用于滚动条与 clamp）
         private bool  _dragging;
         private Vector2 _dragOff;
-        private int   _plantView = -1;
+        private bool  _editing;           // 植物页：false=列表 true=编辑器
         private int   _hotSlider = -1;
         private static int _sliderSeq;
         private static bool _diagLogged, _probed;
@@ -43,16 +44,6 @@ namespace PvzRhCheat
         private static bool _cjk = true;      // 字体是否含中文字形
         private static string L(string zh, string en) { return _cjk ? zh : en; }
 
-        private string[] TabNames()
-        {
-            return new[]
-            {
-                L("功能", "FEATURES"),
-                L("全局植物", "GLOBAL PLANT"),
-                L("植物", "PLANTS"),
-                L("ESP/热键", "ESP / KEYS")
-            };
-        }
 
         // ---------------------------------------------------------------- 配色（不透明）
         private static readonly Color CBg      = new Color(0.055f, 0.065f, 0.085f, 1f);
@@ -70,9 +61,11 @@ namespace PvzRhCheat
         private static readonly Color CHover   = new Color(0.13f, 0.16f, 0.21f, 1f);
         private static readonly Color CBtn     = new Color(0.115f, 0.14f, 0.18f, 1f);
 
-        private const float RowH    = 24f;
-        private const float HeaderH = 28f;
-        private const float TabH    = 32f;
+        private const float RowH    = 27f;
+        private const float HeaderH = 30f;
+        private const float TabH    = 34f;
+        private const float PadX    = 14f;    // 左右留白
+        private const float PadBottom = 14f;  // 内容底部留白（避免最后一行被挡）
 
         // ---------------------------------------------------------------- 绘制原语
         private static bool _fillReady;
@@ -282,7 +275,11 @@ namespace PvzRhCheat
             if (SmallButton(new Rect(_win.xMax - 52f, head.y + 5f, 20f, 18f), _win.height > 200f ? "-" : "+"))
                 _win.height = _win.height > 200f ? 64f : 600f;
 
-            string[] tabs = TabNames();
+            string[] tabs =
+            {
+                L("功能", "FEATURES"), L("全局植物", "GLOBAL PLANT"),
+                L("植物", "PLANTS"), L("ESP/热键", "ESP / KEYS")
+            };
             float tw = (_win.width - 8f) / tabs.Length;
             for (int i = 0; i < tabs.Length; i++)
             {
@@ -291,7 +288,7 @@ namespace PvzRhCheat
                 Fill(r, on ? CTabOn : CTabOff);
                 if (!on && e.type == EventType.MouseDown && e.button == 0 && r.Contains(e.mousePosition))
                 {
-                    _tab = i; _scroll = 0f; e.Use();
+                    _tab = i; _scroll = 0f; _contentH = 0f; e.Use();
                 }
                 Text(r, tabs[i], on ? Color.white : CDim, TextAnchor.MiddleCenter);
             }
@@ -299,37 +296,39 @@ namespace PvzRhCheat
             if (_win.height <= 64f) return;
 
             var view = new Rect(_win.x + 4f, _win.y + HeaderH + TabH, _win.width - 8f,
-                                _win.height - HeaderH - TabH - 24f);
+                                _win.height - HeaderH - TabH - 26f);
             Fill(view, CBg);
 
             if (e.type == EventType.ScrollWheel && view.Contains(e.mousePosition))
             {
-                _scroll += e.delta.y * 20f;
+                _scroll += e.delta.y * 22f;
                 e.Use();
             }
 
-            float contentH = MeasureContent();
-            float maxScroll = Mathf.Max(0f, contentH - view.height);
+            // 用「上一帧实测的内容高度」算 clamp 与滚动条，避免估算不准导致底部够不到
+            float maxScroll = Mathf.Max(0f, _contentH - view.height);
             _scroll = Mathf.Clamp(_scroll, 0f, maxScroll);
 
             GUI.BeginGroup(view);
-            float y = 6f - _scroll;
+            float y = 10f - _scroll;
             DrawContent(ref y, view.width);
+            _contentH = (y + _scroll) + PadBottom;     // 实测内容总高 + 底部留白
             GUI.EndGroup();
 
-            if (maxScroll > 0.5f)
+            if (_contentH > view.height + 0.5f)
             {
-                float barH = Mathf.Max(30f, view.height * (view.height / contentH));
-                float t = _scroll / maxScroll;
-                Fill(new Rect(view.xMax - 5f, view.y, 4f, view.height), CTrack);
-                Fill(new Rect(view.xMax - 5f, view.y + t * (view.height - barH), 4f, barH), CAccent);
+                float barH = Mathf.Max(34f, view.height * (view.height / _contentH));
+                float t = maxScroll <= 0f ? 0f : Mathf.Clamp01(_scroll / maxScroll);
+                Fill(new Rect(view.xMax - 6f, view.y, 5f, view.height), CTrack);
+                Fill(new Rect(view.xMax - 6f, view.y + t * (view.height - barH), 5f, barH), CAccent);
             }
 
-            var foot = new Rect(_win.x, _win.yMax - 22f, _win.width, 22f);
+            var foot = new Rect(_win.x, _win.yMax - 24f, _win.width, 24f);
             Fill(foot, CHead);
-            Text(new Rect(foot.x + 12f, foot.y, foot.width - 24f, foot.height),
-                 L("INSERT 开关菜单    F3 开关ESP    F4 全局植物默认   滚轮滚动",
-                   "INSERT menu   F3 ESP   F4 global defaults   wheel to scroll"), CDim);
+            Text(new Rect(foot.x + PadX, foot.y, foot.width - PadX * 2f, foot.height),
+                 L("关卡: ", "Level: ") + Actions.LevelInfo() +
+                 L("    植物: ", "    plants: ") + Plants.Count +
+                 (_editing ? L("    [编辑中]", "    [editing]") : ""), CDim);
         }
 
         private bool SmallButton(Rect r, string label)
@@ -345,13 +344,6 @@ namespace PvzRhCheat
         // ---------------------------------------------------------------- 内容
         private static List<Plant> Plants => Actions.PlantsSnapshot();
 
-        private float MeasureContent()
-        {
-            if (_tab == 0) return 26f * 8 + 24f * 18 + 60f;
-            if (_tab == 1) return 26f * 5 + 24f * 16 + 60f;
-            if (_tab == 2) return _plantView < 0 ? 26f + 24f * (Plants.Count + 2) : 24f * 26 + 90f;
-            return 26f * 4 + 24f * 8 + 80f;
-        }
 
         private void DrawContent(ref float y, float w)
         {
@@ -390,8 +382,10 @@ namespace PvzRhCheat
             ModConfig.TravelDamageAmplification.Value =
                 Slider(ref y, w, L("伤害增幅", "Damage amp x"), ModConfig.TravelDamageAmplification.Value, 0f, 30f);
             ModConfig.TravelPlantZeroHealth.Value = Toggle(ref y, w, "plantZeroHealth", ModConfig.TravelPlantZeroHealth.Value);
-            TextRow(ref y, w, "Buff", L("普通词条白名单（点击输入，回车确认）", "Buff whitelist (csv)"), ModConfig.BuffWhitelist);
-            TextRow(ref y, w, "Ulti", L("终极词条白名单", "Ulti whitelist (csv)"), ModConfig.UltiBuffWhitelist);
+            ModConfig.BuffWhitelist.Value = TextRow(ref y, w, "Buff",
+                L("普通词条白名单（点击输入，回车确认）", "Buff whitelist (csv)"), ModConfig.BuffWhitelist.Value);
+            ModConfig.UltiBuffWhitelist.Value = TextRow(ref y, w, "Ulti",
+                L("终极词条白名单", "Ulti whitelist (csv)"), ModConfig.UltiBuffWhitelist.Value);
 
             Section(ref y, w, L("天赋", "TALENTS"));
             ModConfig.TalentUnlockAll.Value = Toggle(ref y, w, L("解锁全部天赋", "Unlock all talents"), ModConfig.TalentUnlockAll.Value);
@@ -436,37 +430,66 @@ namespace PvzRhCheat
 
         private void DrawPlants(ref float y, float w)
         {
-            if (_plantView < 0) DrawPlantList(ref y, w);
+            if (!_editing || Actions.SelectedPlant() == null) DrawPlantList(ref y, w);
             else DrawPlantEditor(ref y, w);
         }
 
         private void DrawPlantList(ref float y, float w)
         {
-            Section(ref y, w, L("场景中的植物（点一行进入编辑）", "LIVE PLANTS (click a row to edit)  ") + Plants.Count);
+            Section(ref y, w, L("场景中的植物（点一行进入编辑）", "LIVE PLANTS (click a row to edit)"));
+
+            // 关卡类型 + 数据来源，用来判断为什么"没有植物"
+            Text(new Rect(PadX, y, w - PadX * 2f, RowH),
+                 L("关卡: ", "Level: ") + Actions.LevelInfo() +
+                 L("    来源: ", "    source: ") + Actions.PlantSource() +
+                 L("    花园植物: ", "    garden: ") + Actions.GardenCount(), CDim);
+            y += RowH;
+
             if (Plants.Count == 0)
             {
-                Text(new Rect(12f, y, w - 24f, RowH), L("场景里没有植物，先进入关卡", "no plants in scene - enter a level"), CDim);
+                Text(new Rect(PadX, y, w - PadX * 2f, RowH),
+                     Actions.IsInLevel()
+                        ? L("这一关目前没有植物", "no plants in this level right now")
+                        : L("不在关卡内（请先进入一关）", "not in a level - enter one first"), CDim);
                 y += RowH;
+                if (Actions.GardenCount() > 0)
+                {
+                    Text(new Rect(PadX, y, w - PadX * 2f, RowH),
+                         L("检测到花园植物（GardenPlant），本编辑器不支持该类型",
+                           "garden plants detected (GardenPlant) - unsupported type"), CDim);
+                    y += RowH;
+                }
                 return;
             }
+
             for (int i = 0; i < Plants.Count; i++)
             {
                 Plant p = Plants[i];
-                var r = new Rect(6f, y, w - 12f, RowH - 2f);
+                var r = new Rect(6f, y, w - 12f, RowH - 3f);
                 bool sel = Actions.IsSelected(p);
                 Fill(r, sel ? CTabOn : (i % 2 == 1 ? CRowAlt : CBg));
                 if (!sel && r.Contains(Event.current.mousePosition)) Fill(r, CHover);
 
                 string type = "?";
-                int hp = 0, mx = 0;
-                try { type = p.thePlantType.ToString(); hp = p.thePlantHealth; mx = p.thePlantMaxHealth; } catch { }
-                Text(new Rect(r.x + 10f, r.y, w - 140f, r.height), "#" + i + "  " + type, sel ? Color.white : CText);
-                Text(new Rect(r.xMax - 120f, r.y, 110f, r.height), hp + "/" + mx, sel ? Color.white : CDim, TextAnchor.MiddleRight);
+                int hp = 0, mx = 0, row = 0, col = 0;
+                try
+                {
+                    type = p.thePlantType.ToString();
+                    hp = p.thePlantHealth; mx = p.thePlantMaxHealth;
+                    row = p.thePlantRow; col = p.thePlantColumn;
+                }
+                catch { }
+                Text(new Rect(r.x + 12f, r.y, w - 280f, r.height),
+                     "#" + i + "   " + type, sel ? Color.white : CText);
+                Text(new Rect(r.xMax - 260f, r.y, 120f, r.height),
+                     L("行", "r") + row + L(" 列", " c") + col, sel ? Color.white : CDim);
+                Text(new Rect(r.xMax - 130f, r.y, 118f, r.height),
+                     hp + "/" + mx, sel ? Color.white : CDim, TextAnchor.MiddleRight);
 
                 Event e = Event.current;
                 if (e.type == EventType.MouseDown && e.button == 0 && r.Contains(e.mousePosition))
                 {
-                    _plantView = i; Actions.Select(p); _scroll = 0f; e.Use();
+                    Actions.Select(p); _editing = true; _scroll = 0f; e.Use();
                 }
                 y += RowH;
             }
@@ -474,10 +497,10 @@ namespace PvzRhCheat
 
         private void DrawPlantEditor(ref float y, float w)
         {
-            Plant p = Actions.PlantAt(_plantView);
-            if (p == null) { _plantView = -1; return; }
+            Plant p = Actions.SelectedPlant();
+            if (p == null) { _editing = false; return; }
 
-            if (Button(ref y, w, L("< 返回植物列表", "< BACK TO LIST"))) { _plantView = -1; _scroll = 0f; return; }
+            if (Button(ref y, w, L("< 返回植物列表", "< BACK TO LIST"))) { _editing = false; _scroll = 0f; return; }
 
             string type = "?";
             int hp = 0, mx = 0, row = 0, col = 0;
@@ -487,7 +510,7 @@ namespace PvzRhCheat
                 hp = p.thePlantHealth; mx = p.thePlantMaxHealth; row = p.thePlantRow; col = p.thePlantColumn;
             }
             catch { }
-            Section(ref y, w, L("植物 #", "PLANT #") + _plantView + "  " + type);
+            Section(ref y, w, L("正在编辑: ", "EDITING: ") + type);
             Text(new Rect(12f, y, w - 24f, RowH),
                  L("行 ", "row ") + row + L("  列 ", "  col ") + col + L("   生命 ", "   HP ") + hp + "/" + mx, CDim);
             y += RowH;
@@ -548,7 +571,7 @@ namespace PvzRhCheat
 
             Section(ref y, w, L("信息", "INFO"));
             Text(new Rect(12f, y, w - 24f, RowH), L("场景植物数: ", "plants in scene: ") + Plants.Count, CDim); y += RowH;
-            if (Button(ref y, w, L("清空全部单株覆盖", "Clear ALL per-plant overrides"))) { Overrides.ClearAll(); _plantView = -1; }
+            if (Button(ref y, w, L("清空全部单株覆盖", "Clear ALL per-plant overrides"))) { Overrides.ClearAll(); _editing = false; }
         }
 
         // ---------------------------------------------------------------- 控件
@@ -648,7 +671,7 @@ namespace PvzRhCheat
         private string _focusKey;
         private string _editText = "";
 
-        private void TextRow(ref float y, float w, string key, string label, BepInEx.Configuration.ConfigEntry<string> entry)
+        private string TextRow(ref float y, float w, string key, string label, string value)
         {
             Text(new Rect(12f, y, w - 24f, 16f), label, CDim);
             y += 18f;
@@ -660,7 +683,7 @@ namespace PvzRhCheat
             Event e = Event.current;
             if (e.type == EventType.MouseDown && e.button == 0)
             {
-                if (r.Contains(e.mousePosition)) { _focusKey = key; _editText = entry.Value ?? ""; e.Use(); }
+                if (r.Contains(e.mousePosition)) { _focusKey = key; _editText = value ?? ""; e.Use(); }
                 else if (focused) _focusKey = null;
             }
 
@@ -682,14 +705,15 @@ namespace PvzRhCheat
                         _editText += e.character; e.Use();
                     }
                 }
-                if (_editText != entry.Value) { entry.Value = _editText; Actions.InvalidateBuffCache(); }
+                if (_editText != value) { value = _editText; Actions.InvalidateBuffCache(); }
                 float cx = r.x + 6f + EstimateWidth(_editText);
                 Fill(new Rect(cx, r.y + 3f, 1.5f, r.height - 6f), CAccent);
             }
 
             Text(new Rect(r.x + 6f, r.y, r.width - 12f, r.height),
-                 focused ? _editText : (entry.Value ?? ""), focused ? Color.white : CText);
+                 focused ? _editText : (value ?? ""), focused ? Color.white : CText);
             y += RowH;
+            return value;
         }
 
         private static float EstimateWidth(string s)
@@ -731,10 +755,11 @@ namespace PvzRhCheat
             Camera cam = Camera.main;
             if (cam == null) return;
 
-            var arr = UnityEngine.Object.FindObjectsOfType<Plant>();
+            // 用游戏自己的植物列表（Board.boardEntity.plantArray），覆盖所有关卡类型
+            var arr = Actions.PlantsSnapshot();
             if (arr == null) return;
 
-            for (int i = 0; i < arr.Length; i++)
+            for (int i = 0; i < arr.Count; i++)
             {
                 Plant p = arr[i];
                 if (p == null) continue;
@@ -768,7 +793,7 @@ namespace PvzRhCheat
                 if (e.type == EventType.MouseDown && e.button == 0 && rect.Contains(e.mousePosition))
                 {
                     Actions.Select(p);
-                    _plantView = i;
+                    _editing = true;
                     _tab = 2;
                     ShowMenu = true;
                     e.Use();
