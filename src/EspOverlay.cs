@@ -48,7 +48,8 @@ namespace PvzRhCheat
         {
             Event e = Event.current;
             if (e == null || e.type != EventType.KeyDown) return;
-            if (e.keyCode == KeyCode.F3) { ShowEsp = !ShowEsp; e.Use(); }
+            // 热键可在游戏内「设置」页自定义，默认 F3
+            if (e.keyCode == ModConfig.EspKeyCode()) { ShowEsp = !ShowEsp; e.Use(); }
         }
 
         private void DrawEsp()

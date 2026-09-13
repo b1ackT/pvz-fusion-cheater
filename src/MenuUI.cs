@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using HarmonyLib;
@@ -288,7 +288,7 @@ namespace PvzRhCheat
 
             if (UiSkin.SmallButton(espR, esp ? "ESP: 开" : "ESP: 关", esp, true))
                 EspOverlay.ShowEsp = !esp;
-            if (UiSkin.SmallButton(hideR, "隐藏 (Insert)", false, true)) Show = false;
+            if (UiSkin.SmallButton(hideR, "隐藏 (" + ModConfig.MenuKeyCode() + ")", false, true)) Show = false;
             if (UiSkin.SmallButton(closeR, "", false, true)) Show = false;
             UiSkin.Glyph(closeR, "×", UiSkin.ColRed);
 
@@ -334,7 +334,7 @@ namespace PvzRhCheat
             Fill(r, UiSkin.ColTitle);
             string s = _status;
             if (string.IsNullOrEmpty(s) || Time.realtimeSinceStartup - _statusAt > 8.0)
-                s = "Insert 显示/隐藏   ·   F3 开关 ESP   ·   点植物上的方框选中它";
+                s = ModConfig.MenuKeyCode() + " 显示/隐藏   ·   " + ModConfig.EspKeyCode() + " 开关 ESP   ·   点植物上的方框选中它";
             UiSkin.Text(new Rect(r.x + 8f, r.y, r.width * 0.58f, r.height), s, UiSkin.Left);
 
             string info = "关卡 " + Actions.LevelInfo()
@@ -359,11 +359,42 @@ namespace PvzRhCheat
             Event e = Event.current;
             if (e == null || e.type != EventType.KeyDown) return;
 
+            // 正在改键：下一个按下的键就是新热键
+            if (_binding != 0) { BindKey(e); return; }
+
             if (_editKind != EK_NONE) { EditKey(e); return; }
 
-            if (e.keyCode == KeyCode.Insert) { Show = !Show; e.Use(); }
-            else if (e.keyCode == KeyCode.F3) { EspOverlay.ShowEsp = !EspOverlay.ShowEsp; e.Use(); }
+            KeyCode mk = ModConfig.MenuKeyCode();
+            KeyCode ek = ModConfig.EspKeyCode();
+            if (e.keyCode == mk) { Show = !Show; Plugin.Log.LogInfo("[菜单] 显示/隐藏 = " + Show + "（热键 " + mk + "）"); e.Use(); }
+            else if (e.keyCode == ek) { EspOverlay.ShowEsp = !EspOverlay.ShowEsp; e.Use(); }
             else if (e.keyCode == KeyCode.Escape && _pickerOpen) { _pickerOpen = false; e.Use(); }
+        }
+
+        /// <summary>改键：1 = 菜单键，2 = ESP 键</summary>
+        private static int _binding;
+
+        private static void BindKey(Event e)
+        {
+            if (e.keyCode == KeyCode.Escape || e.keyCode == KeyCode.None && e.character == '\0')
+            {
+                if (e.keyCode == KeyCode.Escape) { _binding = 0; SetStatus("已取消改键"); e.Use(); }
+                return;
+            }
+            if (e.keyCode == KeyCode.None) return;      // 只吃有 keyCode 的按键
+            int which = _binding;
+            _binding = 0;
+            if (which == 1)
+            {
+                ModConfig.SetKey(ModConfig.MenuKey, e.keyCode);
+                SetStatus("菜单显示/隐藏键已改为 " + e.keyCode);
+            }
+            else
+            {
+                ModConfig.SetKey(ModConfig.EspKey, e.keyCode);
+                SetStatus("ESP 开关热键已改为 " + e.keyCode);
+            }
+            e.Use();
         }
 
         private static void EditKey(Event e)
@@ -1066,6 +1097,18 @@ namespace PvzRhCheat
                 SetStatus(Actions.ActionEnterGame(0, 1));
             if (UiSkin.Button(new Rect(x1, y, bw, bh), "回到主菜单", false, true))
                 SetStatus(Actions.ActionEnterGame(-1, 1));
+            y += bh + 8f;
+            // 一键把**所有**作弊项关掉（含配置里被写脏的），回到"什么都不改"的状态
+            if (UiSkin.Button(new Rect(x0, y, bw, bh), "★ 一键关闭全部作弊", true, true))
+            {
+                int n = ModConfig.ForceAllOff();
+                SetStatus("已把 " + n + " 个作弊项恢复为关闭/中性值（立即生效，无需重启）");
+            }
+            if (UiSkin.Button(new Rect(x1, y, bw, bh), "只关总开关（Enabled）", false, true))
+            {
+                ModConfig.Enabled.Value = false;
+                SetStatus("总开关已关闭：所有功能停止生效（再点「功能开关」页的「总开关」可恢复）");
+            }
             y += bh + 12f;
 
             Fill(new Rect(cr.x, y, cr.width, cr.height - (y - cr.y) - 4f), UiSkin.ColBack2);
@@ -1132,14 +1175,34 @@ namespace PvzRhCheat
                 new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
             y += 62f;
 
-            UiSkin.Text(new Rect(cr.x + 4f, y, cr.width, 20f), "热键", UiSkin.Bold);
+            // ---------------- 热键（可自定义） ----------------
+            UiSkin.Text(new Rect(cr.x + 4f, y, cr.width, 20f), "热键（点按钮后按新键即可改，Esc 取消）", UiSkin.Bold);
             y += 22f;
-            UiSkin.Text(new Rect(cr.x + 8f, y, cr.width - 16f, 80f),
-                "Insert —— 显示 / 隐藏这个菜单\n" +
-                "F3 —— 开关植物 ESP 方框\n" +
-                "鼠标左键点方框 —— 选中那株植物\n" +
+
+            float krh = 24f;
+            UiSkin.Text(new Rect(cr.x + 8f, y, 110f, krh), "菜单 显示/隐藏", UiSkin.Left);
+            Rect mk = new Rect(cr.x + 122f, y, 130f, krh);
+            string mkLabel = _binding == 1 ? "请按新键…" : ModConfig.MenuKeyCode().ToString();
+            if (UiSkin.Button(mk, mkLabel, _binding == 1, true)) { _binding = 1; SetStatus("请按下想用来显示/隐藏菜单的按键（Esc 取消）"); }
+            UiSkin.Text(new Rect(cr.x + 260f, y, cr.width - 268f, krh),
+                "默认 F1。建议用 F1~F12 或 Insert 这类游戏不会用到的键。",
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+            y += krh + 4f;
+
+            UiSkin.Text(new Rect(cr.x + 8f, y, 110f, krh), "ESP 方框开关", UiSkin.Left);
+            Rect ek = new Rect(cr.x + 122f, y, 130f, krh);
+            string ekLabel = _binding == 2 ? "请按新键…" : ModConfig.EspKeyCode().ToString();
+            if (UiSkin.Button(ek, ekLabel, _binding == 2, true)) { _binding = 2; SetStatus("请按下想用来开关 ESP 的按键（Esc 取消）"); }
+            UiSkin.Text(new Rect(cr.x + 260f, y, cr.width - 268f, krh),
+                "默认 F3。",
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+            y += krh + 8f;
+
+            UiSkin.Text(new Rect(cr.x + 8f, y, cr.width - 16f, 76f),
+                "鼠标左键点 ESP 方框 —— 选中那株植物\n" +
                 "编辑数值时：回车确认，Esc 取消，退格删除\n" +
-                "鼠标压在菜单上时，游戏不会响应点击（不会误种植物）",
+                "鼠标压在菜单上时，游戏不会响应点击（不会误种植物）\n" +
+                "热键会写进配置文件，下次启动依然有效",
                 new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
         }
 

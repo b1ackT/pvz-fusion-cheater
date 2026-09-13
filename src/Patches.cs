@@ -39,6 +39,8 @@ namespace PvzRhCheat
             // 批量变身 / 游戏速度（每帧都要保持，不走 0.25 秒的节流）
             try { RunPendingChangeAll(); } catch (Exception e) { LogSlow("FastTick/批量变身", e); }
             try { GameSpeedTweak(); } catch (Exception e) { LogSlow("FastTick/速度", e); }
+            // 卡片/工具无冷却：0.25 秒刷一次，别等 2 秒的施加周期（会看到冷却条回涨）
+            try { FastCardTweak(); } catch (Exception e) { LogSlow("FastTick/卡片", e); }
             // 融合会换掉植物对象，重新读一次列表
             if (RefreshPlantsAgain()) RefreshPlants();
 
@@ -526,7 +528,6 @@ namespace PvzRhCheat
             Step(TravelTweaks,        nameof(TravelTweaks));
             Step(ClassicCheats,       nameof(ClassicCheats));
             Step(ZombieHpTweak,       nameof(ZombieHpTweak));
-            Step(Tools.ZeroCooldowns, nameof(Tools.ZeroCooldowns));
 
             if (!_loggedOnce)
             {
@@ -611,14 +612,12 @@ namespace PvzRhCheat
         }
 
         // ================================================================== 经典作弊
-        /// <summary>周期性的经典作弊（自动收集 / 免费种植 / 无冷却 / 冻结等）</summary>
+        /// <summary>周期性的经典作弊（自动收集 / 冻结 / 停速 / 秒杀 等）
+        /// 卡片和工具的无冷却已经挪到 FastCardTweak（每 0.25 秒刷一次）。</summary>
         internal static void ClassicCheats()
         {
             try { if (ModConfig.AutoCollectSun.Value) TreasureData.autoCollect = true; }
             catch (Exception e) { LogSlow("cheat/autoCollect", e); }
-
-            if (ModConfig.NoCardCooldown.Value || ModConfig.FreePlanting.Value || ModConfig.UnlimitedCardUse.Value)
-                TweakCards();
 
             if (ModConfig.FreezeAllZombies.Value) ForEachZombie(FreezeOne);
             if (ModConfig.ZombiesStopMoving.Value) ForEachZombie(StopOne);
@@ -690,8 +689,35 @@ namespace PvzRhCheat
         private static void StopOne(Zombie z) { try { z.theSpeed = 0f; } catch { } }
         private static void KillOne(Zombie z) { try { z.Die(0); } catch { } }
 
+        /// <summary>卡片的原始数值（按对象指针缓存），关闭作弊时用来还原</summary>
+        private struct CardBase
+        {
+            public float FullCd;
+            public int Cost;
+            public int MaxUse;
+            public bool CdTouched, CostTouched, UseTouched;
+        }
+
+        private static readonly System.Collections.Generic.Dictionary<IntPtr, CardBase> _cardBase =
+            new System.Collections.Generic.Dictionary<IntPtr, CardBase>();
+
+        /// <summary>
+        /// 卡片无冷却 / 免费种植 / 无限使用。
+        ///
+        /// 实测结论（2026-09-13，靠 `ACTION|Cards` 打印出来的数据）：
+        ///   · 游戏每帧用**自己的计时器重算 CD**（`CD = fullCD - 已过时间`），
+        ///     所以只写 `CD = 0` 完全没用：下一帧就被覆盖；而我们每 2 秒再拍一次 0，
+        ///     表现就是"冷却条一直在重置"—— 正是用户报的那个现象。
+        ///   · 真正有效的是把 `fullCD` 清零，这样 CD 会算成负数，卡片恒为"已就绪"。
+        ///   · 关掉功能时要**还原**（只清标记不还原的话，得等下一关卡片重建才恢复），
+        ///     所以这里按对象指针缓存原始 `fullCD` / `theSeedCost` / `maxUsedTimes`。
+        /// </summary>
         private static void TweakCards()
         {
+            bool noCd = ModConfig.NoCardCooldown.Value;
+            bool free = ModConfig.FreePlanting.Value;
+            bool unlim = ModConfig.UnlimitedCardUse.Value;
+
             var arr = FindAll(typeof(CardUI));
             if (arr == null) return;
             for (int i = 0; i < arr.Length; i++)
@@ -703,15 +729,100 @@ namespace PvzRhCheat
                 if (c == null) continue;
                 try
                 {
-                    if (ModConfig.NoCardCooldown.Value) c.CD = 0f;
-                    if (ModConfig.FreePlanting.Value) c.theSeedCost = 0;
-                    if (ModConfig.UnlimitedCardUse.Value) c.maxUsedTimes = 9999;
+                    IntPtr key = c.Pointer;
+                    CardBase b;
+                    if (!_cardBase.TryGetValue(key, out b)) b = new CardBase();
+
+                    if (noCd)
+                    {
+                        if (!b.CdTouched && c.fullCD > 0f) { b.FullCd = c.fullCD; b.CdTouched = true; }
+                        c.CD = 0f;
+                        c.fullCD = 0f;
+                    }
+                    else if (b.CdTouched)
+                    {
+                        if (c.fullCD <= 0.001f) c.fullCD = b.FullCd;
+                        b.CdTouched = false;
+                    }
+
+                    if (free)
+                    {
+                        if (!b.CostTouched && c.theSeedCost > 0) { b.Cost = c.theSeedCost; b.CostTouched = true; }
+                        c.theSeedCost = 0;
+                    }
+                    else if (b.CostTouched)
+                    {
+                        if (c.theSeedCost == 0) c.theSeedCost = b.Cost;
+                        b.CostTouched = false;
+                    }
+
+                    if (unlim)
+                    {
+                        if (!b.UseTouched) { b.MaxUse = c.maxUsedTimes; b.UseTouched = true; }
+                        c.maxUsedTimes = 9999;
+                        if (c.usedTimes > 0) c.usedTimes = 0;
+                    }
+                    else if (b.UseTouched)
+                    {
+                        if (c.maxUsedTimes == 9999) c.maxUsedTimes = b.MaxUse;
+                        b.UseTouched = false;
+                    }
+
+                    if (b.CdTouched || b.CostTouched || b.UseTouched) _cardBase[key] = b;
+                    else _cardBase.Remove(key);
                 }
                 catch { }
             }
+            // 关卡切换会重建卡片对象，缓存别无限涨
+            if (_cardBase.Count > 600) _cardBase.Clear();
+        }
+
+        /// <summary>
+        /// 卡片/工具的无冷却**每 0.25 秒就要刷一次**（不能等 2 秒的施加周期），
+        /// 否则冷却条会先涨回去再被拍平，看起来就是"在闪/在重置"。
+        /// 注意：**功能关掉时也要继续跑**，否则没机会把 fullCD 还原回去。
+        /// </summary>
+        internal static void FastCardTweak()
+        {
+            if (!ModConfig.Enabled.Value) return;
+            if (ModConfig.NoCardCooldown.Value || ModConfig.FreePlanting.Value ||
+                ModConfig.UnlimitedCardUse.Value || _cardBase.Count > 0)
+                TweakCards();
+            Tools.ZeroCooldowns();
         }
 
         // ---- 一次性动作（由 UI 按钮 / IPC 触发）----
+
+        /// <summary>诊断：列出场上所有卡片的冷却状态（用来验证"卡片无冷却"有没有真的生效）</summary>
+        internal static string ActionCardInfo()
+        {
+            var arr = FindAll(typeof(CardUI));
+            if (arr == null) return "找不到 CardUI（不在关卡内？）";
+            var sb = new System.Text.StringBuilder(512);
+            int n = 0;
+            for (int i = 0; i < arr.Length; i++)
+            {
+                CardUI c = null;
+                try { c = arr[i] == null ? null : arr[i].TryCast<CardUI>(); } catch { }
+                if (c == null) continue;
+                n++;
+                if (n > 12) continue;
+                string nm = "?";
+                try { nm = PlantDb.CnName((int)c.thePlantType); } catch { }
+                try
+                {
+                    sb.Append(nm).Append(": CD=").Append(c.CD.ToString("0.##"))
+                      .Append(" fullCD=").Append(c.fullCD.ToString("0.##"))
+                      .Append(" 花费=").Append(c.theSeedCost)
+                      .Append(" 次数=").Append(c.usedTimes).Append('/').Append(c.maxUsedTimes)
+                      .Append(" | ");
+                }
+                catch { }
+            }
+            string r = "卡片 " + n + " 张 -> " + sb.ToString();
+            Plugin.Log.LogInfo("[卡片] " + r);
+            return r;
+        }
         internal static string ActionKillAllZombies()
         {
             int n = 0;

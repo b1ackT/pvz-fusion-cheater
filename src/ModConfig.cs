@@ -1,7 +1,8 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Globalization;
 using BepInEx.Configuration;
+using UnityEngine;
 
 namespace PvzRhCheat
 {
@@ -110,6 +111,14 @@ namespace PvzRhCheat
         public static ConfigEntry<bool>   NoToolCooldown;     // 手套/锤子无冷却
         public static ConfigEntry<bool>   UnlockAllPlants;    // 植物图鉴全解锁
 
+        // ---- 热键 ----
+        public static ConfigEntry<string> MenuKey;            // 显示/隐藏菜单，默认 F1
+        public static ConfigEntry<string> EspKey;             // 开关 ESP 方框，默认 F3
+
+        /// <summary>配置结构版本：低于当前值时把"作弊项"强制拉回全关（见 Init 里的迁移）</summary>
+        public static ConfigEntry<int>    ConfigVersion;
+        public const int CurrentConfigVersion = 2;
+
         public static void Init(ConfigFile cfg)
         {
             Enabled  = Reg(cfg.Bind("0-General", "Enabled", true, "Master switch"), "Enabled");
@@ -178,6 +187,87 @@ namespace PvzRhCheat
                 "Glove and hammer have no cooldown"), "NoToolCooldown");
             UnlockAllPlants  = Reg(cfg.Bind("9-Extra", "UnlockAllPlants", false,
                 "Unlock every plant in the almanac / plant pool"), "UnlockAllPlants");
+
+            // ---- 热键 ----
+            MenuKey = Reg(cfg.Bind("A-Hotkey", "MenuKey", "F1",
+                "Key that shows/hides the in-game menu (Unity KeyCode name, e.g. F1, Insert, F8, BackQuote)"), "MenuKey");
+            EspKey  = Reg(cfg.Bind("A-Hotkey", "EspKey", "F3",
+                "Key that toggles the plant ESP boxes"), "EspKey");
+
+            ConfigVersion = Reg(cfg.Bind("A-Hotkey", "ConfigVersion", 0,
+                "Internal: config layout version, used for one-time resets"), "ConfigVersion");
+
+            // ---- 一次性迁移：以前被写脏的配置强制拉回"全关" ----
+            // （之前调试时用 IPC 写过一堆 =1，用户看到"默认还开着一些作弊"就是这个原因）
+            if (ConfigVersion.Value < CurrentConfigVersion)
+            {
+                int changed = ForceAllOff();
+                ConfigVersion.Value = CurrentConfigVersion;
+                try { cfg.Save(); } catch { }
+                Log("配置迁移到 v" + CurrentConfigVersion + "：已把 " + changed + " 个作弊项强制关闭");
+            }
+        }
+
+        private static void Log(string s) { try { Plugin.Log?.LogInfo("[配置] " + s); } catch { } }
+
+        /// <summary>所有作弊项的"关闭/中性"值</summary>
+        private static readonly string[][] OffValues =
+        {
+            new[]{"UnlockAllLevels","0"}, new[]{"Money","0"}, new[]{"DeveloperMode","0"},
+            new[]{"InfiniteSun","0"}, new[]{"SunFloor","9999"},
+            new[]{"GodModePlants","0"}, new[]{"PlantDamageMultiplier","1"},
+            new[]{"ZombieDamageTakenMultiplier","1"}, new[]{"OneHitZombies","0"},
+            new[]{"TravelBuffs","0"}, new[]{"DamageReduction","0"}, new[]{"LuckyStrike","1"},
+            new[]{"DamageAmplification","1"}, new[]{"PlantZeroHealth","0"},
+            new[]{"BuffWhitelist",""}, new[]{"UltiBuffWhitelist",""},
+            new[]{"TalentUnlockAll","0"}, new[]{"TalentStars","0"}, new[]{"DisableHardMode","0"},
+            new[]{"AbyssMaxTickets","0"}, new[]{"AbyssInfiniteTickets","0"},
+            new[]{"AutoCollectSun","0"}, new[]{"NoCardCooldown","0"}, new[]{"FreePlanting","0"},
+            new[]{"UnlimitedCardUse","0"}, new[]{"FreezeAllZombies","0"},
+            new[]{"ZombiesStopMoving","0"}, new[]{"AutoKillZombies","0"},
+            new[]{"GameSpeed","1"}, new[]{"StopZombieSpawn","0"}, new[]{"ZombieInvincible","0"},
+            new[]{"ZombieHpMultiplier","1"}, new[]{"NoToolCooldown","0"}, new[]{"UnlockAllPlants","0"},
+        };
+
+        /// <summary>
+        /// 把所有作弊项恢复到"关闭/中性"。返回实际改动的项数。
+        /// 注意：总开关 Enabled、字号、热键这些**不动**。
+        /// </summary>
+        public static int ForceAllOff()
+        {
+            int n = 0;
+            foreach (string[] kv in OffValues)
+            {
+                ConfigEntryBase e = ByKey(kv[0]);
+                if (e == null) continue;
+                string cur = GetString(e);
+                if (cur == kv[1]) continue;
+                SetFromString(e, kv[1]);
+                n++;
+            }
+            return n;
+        }
+
+        // ---------------------------------------------------------------- 热键
+        public static KeyCode MenuKeyCode() { return ParseKey(MenuKey == null ? null : MenuKey.Value, KeyCode.F1); }
+        public static KeyCode EspKeyCode() { return ParseKey(EspKey == null ? null : EspKey.Value, KeyCode.F3); }
+
+        private static KeyCode ParseKey(string s, KeyCode dflt)
+        {
+            if (string.IsNullOrEmpty(s)) return dflt;
+            try
+            {
+                if (Enum.IsDefined(typeof(KeyCode), s)) return (KeyCode)Enum.Parse(typeof(KeyCode), s, false);
+            }
+            catch { }
+            return dflt;
+        }
+
+        /// <summary>把 KeyCode 存成可读名字</summary>
+        public static void SetKey(ConfigEntry<string> entry, KeyCode k)
+        {
+            if (entry == null || k == KeyCode.None) return;
+            entry.Value = k.ToString();
         }
     }
 }

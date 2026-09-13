@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
@@ -230,6 +230,7 @@ namespace PvzRhCheat
                         case "ExportLineup": msg = Actions.ActionExportLineup(); break;
                         case "ImportLineup": msg = p.Length > 2 ? Actions.ActionImportLineup(p[2]) : "缺少阵容码"; break;
                         case "Zombies": msg = "场上僵尸 " + Actions.ZombieCount() + " 只"; break;
+                        case "Cards": msg = Actions.ActionCardInfo(); break;
                         case "Speed":
                             if (p.Length > 2) { ModConfig.GameSpeed.Value = F(p[2]); msg = "游戏速度 = " + ModConfig.GameSpeed.Value; }
                             else msg = "缺少倍率";

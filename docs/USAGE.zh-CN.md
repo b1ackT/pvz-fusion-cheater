@@ -16,7 +16,7 @@
 如果你看到的不是这个，说明游戏里跑的还是旧 DLL，重启游戏即可。
 
 > **怎么确认自己看的是"内置菜单"而不是旧的外置窗口**：
-> 内置菜单的标题栏有 `ESP: 开` / `隐藏 (Insert)` / `×` 三个按钮，
+> 内置菜单的标题栏有 `ESP: 开` / `隐藏 (F1)` / `×` 三个按钮，
 > 下面是 **6 个页签**（功能开关 · 植物 · 融合 · 沙盒 · 作弊动作 · 设置）。
 > 外置的 `PvzRhCheatUi.exe` 是 WinForms 窗口，**已经不自动启动了**，也不需要再用了。
 
@@ -26,14 +26,18 @@
 
 | 热键 / 操作 | 作用 |
 |---|---|
-| **INSERT** | 显示 / 隐藏菜单 |
-| **F3** | 显示 / 隐藏植物 ESP 方框 |
+| **F1** | 显示 / 隐藏菜单（**可自定义**，见「设置」页） |
+| **F3** | 显示 / 隐藏植物 ESP 方框（**可自定义**） |
 | **鼠标左键点 ESP 方框** | 选中那株植物 |
 | 编辑数值时 **回车** / **ESC** | 确认 / 取消（退格删除；筛选框可以直接打字）|
-| 标题栏 `隐藏(Insert)` / `×` | 关掉菜单 |
+| 标题栏 `隐藏(F1)` / `×` | 关掉菜单 |
 
+> **热键可以在游戏内改**：「设置」页有两个按钮（菜单键 / ESP 键），点一下再按你想要的键即可，
+> 按 Esc 取消。改完写进配置文件，下次启动依然有效；**默认 F1 / F3**。
+> 建议用 F1~F12 或 Insert 这类游戏本身不占用的键。
+>
 > **鼠标压在菜单上时，游戏不响应点击** —— 插件给 `Mouse.Update` 打了前缀补丁，
-> 所以点菜单不会顺手在游戏里种植物、点卡片。
+> 所以点菜单不会顺手在游戏里种植物、点卡片。滚轮同理（压在面板上时会被菜单吃掉）。
 
 菜单 6 个页签：
 
@@ -170,6 +174,9 @@
 | `AbyssMaxTickets` / `AbyssInfiniteTickets` | `false` | |
 | `DamageReduction` / `DamageAmplification` | `0` / `1` | 中性值 |
 | `AutoLaunchUi` | `false` | 外置窗口已不再需要 |
+| `GameSpeed` / `ZombieHpMultiplier` | `1` / `1` | 中性值 |
+| `StopZombieSpawn` / `ZombieInvincible` / `NoToolCooldown` / `UnlockAllPlants` | `false` | |
+| `MenuKey` / `EspKey` | `F1` / `F3` | 界面热键，可在「设置」页改 |
 
 > 若你之前用过旧版本（默认全开），删掉 `BepInEx\config\com.dsh.pvzrh.cheat.cfg`
 > 让新默认值生效即可。
@@ -313,6 +320,7 @@ copy bin\Release\PvzRhCheat.dll ..\..\BepInEx\plugins\
 | `ACTION\|ZombieHp\|<倍率>` / `ChangeAllPlants\|<类型>` / `ChangeAllZombies\|<类型>` | 僵尸血量倍率 / 群体变身 |
 | `ACTION\|ExportLineup` / `ImportLineup\|<阵容码>` | 阵容码 |
 | `ACTION\|Speed\|<倍率>` / `Zombies` | 游戏速度 / 数僵尸 |
+| `ACTION\|Cards` | 打印每张卡片的 `CD` / `fullCD` / 花费 / 次数（验证无冷却是否生效） |
 | `ACTION\|Fuse\|<伙伴类型>` | 让当前选中的植物与该伙伴直接融合 |
 | `ACTION\|FusionTest\|<类型>` | 跑一遍融合页的全部游戏调用并输出报告（不需要看屏幕就能验证） |
 
@@ -495,7 +503,49 @@ if (k < _scroll[0] || k >= _scroll[0] + visible) continue;
 
 ---
 
+### 6.11 「卡片无冷却」为什么之前是坏的：写 CD 没用，要写 fullCD
+
+用户报"开了之后会一直重置到有冷却"。用新加的 `ACTION|Cards` 把每张卡的实际值打出来才看清：
+
+```
+默认       冰块礼盒: CD=0  fullCD=30   雪棘草: CD=30 fullCD=30   冬笋路障: CD=15 fullCD=15
+只写 CD=0  冰块礼盒: CD=0  fullCD=30   雪棘草: CD=0  fullCD=30   ← 下一帧就被游戏覆盖回去了
+写 fullCD=0 冰块礼盒: CD=0 fullCD=0    雪棘草: CD=0  fullCD=0    ← 真的恒为就绪
+```
+
+游戏每帧用**自己的计时器**算 `CD = fullCD - 已过时间`，所以：
+
+- 只写 `CD = 0` → 下一帧就被覆盖；而我们每 2 秒再拍一次 0，
+  看起来就是**冷却条一直在重置**（用户看到的现象）。
+- 把 `fullCD` 清零 → `CD` 算出来是负数 → 卡片恒为"已就绪"。
+- 刷新频率也得跟上：从 2 秒的施加周期挪到 **0.25 秒的快 tick**，否则冷却条会先涨回去再被拍平。
+
+关闭功能时要**还原**：按对象指针缓存原始 `fullCD` / `theSeedCost` / `maxUsedTimes`，
+否则要等下一关卡片重建才恢复。实测三态：
+
+```
+1) 默认       fullCD=30 / fullCD=50 / fullCD=15     ← 正常冷却
+2) 开启无冷却 CD=0 fullCD=0                          ← 恒就绪
+3) 关闭还原   fullCD=30 / fullCD=50                 ← 还原成功
+```
+
 ## 7. 实测验证
+
+### 7.1 默认居然还开着作弊？—— 是调试时用 IPC 写脏了配置
+
+调试过程中我用 `CFG|key|1` 打开过一堆开关，这些会**写进配置文件并持久化**，
+所以用户看到"默认还开着一些作弊"（`AutoCollectSun` / `ZombieHpMultiplier=3` / `UnlockAllPlants`）。
+
+修法：加了配置结构版本 `ConfigVersion`，
+**默认绑 0**（不是当前版本号 —— 否则已存在的旧文件读出来就是新版本，迁移根本不会跑），
+加载时发现 `< 2` 就调 `ForceAllOff()` 把 34 个作弊项全部拉回"关闭/中性"值，然后写回 2。
+实测日志：`[配置] 配置迁移到 v2：已把 23 个作弊项强制关闭`。
+
+另外「作弊动作」页加了 **★ 一键关闭全部作弊** 和 **只关总开关** 两个按钮，随时可以一键回到干净状态。
+
+> `ForceAllOff()` 只动作弊项，**不动**总开关 `Enabled`、字号、热键这些偏好设置。
+
+---
 
 补丁加载 **17/17 全部成功**（`GameAPP_Awake/_Update`、`Board_UseSun/_UseMoney`、
 `Plant_TakeDamage/_RealTakeDamage/_DecreaseHealth`、`Zombie_TakeDamage`、`Bullet_InitData`、
