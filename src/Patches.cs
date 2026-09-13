@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using HarmonyLib;
 using Il2CppSystem.Collections.Generic;
@@ -625,7 +625,7 @@ namespace PvzRhCheat
         }
 
         /// <summary>用非泛型 FindObjectsOfType，避免泛型实例化被裁剪时静默返回空</summary>
-        private static Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<UnityEngine.Object>
+        internal static Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppReferenceArray<UnityEngine.Object>
             FindAll(Type t)
         {
             try { return UnityEngine.Object.FindObjectsOfType(Il2CppInterop.Runtime.Il2CppType.From(t)); }
@@ -1549,34 +1549,143 @@ namespace PvzRhCheat
     /// </summary>
     internal static class Tools
     {
+        // ---------------------------------------------------------------- 冷却总清单
+        // 把游戏里**所有**和冷却有关的地方列全（2026-09-13 全量核对）：
+        //
+        //   类                          场地                      我原来的做法 / 问题
+        //   CardUI                      CD, fullCD                ✅ 写 fullCD=0（写 CD 无效，游戏每帧重算）
+        //     └ SpecialCard             重写 CDUpdate()
+        //   InGameTool（基类）           fullCD, CD, coolSpeed      ⚠️ 原来漏了 coolSpeed
+        //     ├ Glove  : InGameTool     重写 UpdateCDTimer()      ❌ 有 static Glove.Instance，原来用 GetComponent 找
+        //     ├ Hammer : InGameTool     重写 UpdateCDTimer()      ❌ 同上（有 static Hammer.Instance）
+        //     ├ Shovel : InGameTool     不重写（用基类）           ❌ 同上（有 static Shovel.Instance）
+        //     └ Wheel  : InGameTool     不重写                     ❌ 完全没处理（没有 static Instance）
+        //   Board                       freeCD (bool)             ❌ **原来完全没碰 —— 这才是游戏自己的"无CD模式"总开关**
+        //   Lawnf.GetGloveCD()          static 返回 float         ✅ 已加后缀补丁返回 0
+        //   IZManager.AICard            cd, fullcd                 — IZE 模式的 AI 出怪卡，与玩家无关
+        //   LevelData.gloveCD           关卡配置里的手套 CD        — 只读配置，不用改
+        //
+        // 所以"手套无冷却没用"的原因是两条：
+        //   1) 没设 Board.freeCD（游戏自己的总开关）
+        //   2) 工具的 CD 字段是拿 InGameUI 上的 GameObject 去 GetComponent 找的，不一定找得到；
+        //      应该直接用 Glove.Instance / Hammer.Instance / Shovel.Instance。
+
+        private static bool _boardFreeCdSaved;
+        private static bool _boardFreeCdOld;
+
         internal static void ZeroCooldowns()
         {
             try
             {
-                if (!ModConfig.Enabled.Value || !ModConfig.NoToolCooldown.Value) return;
-                InGameUI ui = InGameUI.Instance;
-                if (ui == null) return;
-                Zero(ui.GloveBank);
-                Zero(ui.HammerBank);
-                Zero(ui.ShovelBank);
+                bool on = ModConfig.Enabled.Value && ModConfig.NoToolCooldown.Value;
+
+                // (1) 游戏自己的总开关：Board.freeCD
+                Board b = Board.Instance;
+                if (b != null)
+                {
+                    if (on)
+                    {
+                        if (!_boardFreeCdSaved) { _boardFreeCdOld = b.freeCD; _boardFreeCdSaved = true; }
+                        if (!b.freeCD) b.freeCD = true;
+                    }
+                    else if (_boardFreeCdSaved)
+                    {
+                        if (b.freeCD != _boardFreeCdOld) b.freeCD = _boardFreeCdOld;
+                        _boardFreeCdSaved = false;
+                    }
+                }
+
+                if (!on) return;
+
+                // (2) 三个工具有 static Instance，直接用，最稳
+                Zero(Glove.Instance);
+                Zero(Hammer.Instance);
+                Zero(Shovel.Instance);
+
+                // (3) 兜底：把场上所有 InGameTool 都扫一遍（覆盖 Wheel 这种没有 Instance 的）
+                var arr = Actions.FindAll(typeof(InGameTool));
+                if (arr != null)
+                {
+                    for (int i = 0; i < arr.Length; i++)
+                    {
+                        var o = arr[i];
+                        if (o == null) continue;
+                        InGameTool t = null;
+                        try { t = o.TryCast<InGameTool>(); } catch { }
+                        Zero(t);
+                    }
+                }
             }
             catch { }
         }
 
-        private static void Zero(GameObject go)
+        private static void Zero(InGameTool t)
         {
-            if (go == null) return;
+            if (t == null) return;
             try
             {
-                var comp = go.GetComponent(Il2CppInterop.Runtime.Il2CppType.Of<InGameTool>());
-                if (comp == null) return;
-                InGameTool t = comp.TryCast<InGameTool>();
-                if (t == null) return;
                 t.CD = 0f;
                 t.fullCD = 0f;
                 t.avaliable = true;
+                try { t.coolSpeed = 0f; } catch { }   // 让 CD 永远涨不上去
             }
             catch { }
+        }
+
+        /// <summary>诊断：打印冷却相关的真实数值（验证"无冷却"到底有没有写进去）</summary>
+        internal static string Info()
+        {
+            var sb = new System.Text.StringBuilder(400);
+            try
+            {
+                Board b = Board.Instance;
+                sb.Append("Board.freeCD=").Append(b == null ? "无Board" : b.freeCD.ToString()).Append("  ");
+            }
+            catch { sb.Append("Board.freeCD=?  "); }
+            try { sb.Append("GetGloveCD()=").Append(Lawnf.GetGloveCD().ToString("0.##")).Append("  "); }
+            catch { sb.Append("GetGloveCD=?  "); }
+            sb.Append('\n');
+            Append(sb, "手套 Glove", Glove.Instance);
+            Append(sb, "锤子 Hammer", Hammer.Instance);
+            Append(sb, "铁锹 Shovel", Shovel.Instance);
+
+            var arr = Actions.FindAll(typeof(InGameTool));
+            int n = arr == null ? 0 : arr.Length;
+            sb.Append("InGameTool 实例共 ").Append(n).Append(" 个");
+            if (arr != null)
+            {
+                for (int i = 0; i < arr.Length && i < 6; i++)
+                {
+                    InGameTool t = null;
+                    try { t = arr[i] == null ? null : arr[i].TryCast<InGameTool>(); } catch { }
+                    if (t == null) continue;
+                    sb.Append("\n  ").Append(t.GetType().Name).Append(": ");
+                    Detail(sb, t);
+                }
+            }
+            string r = sb.ToString();
+            Plugin.Log.LogInfo("[工具] " + r.Replace("\n", " | "));
+            return r;
+        }
+
+        private static void Append(System.Text.StringBuilder sb, string label, InGameTool t)
+        {
+            sb.Append(label).Append(": ");
+            if (t == null) { sb.Append("(没有实例)\n"); return; }
+            Detail(sb, t);
+            sb.Append('\n');
+        }
+
+        private static void Detail(System.Text.StringBuilder sb, InGameTool t)
+        {
+            try
+            {
+                sb.Append("CD=").Append(t.CD.ToString("0.##"))
+                  .Append(" fullCD=").Append(t.fullCD.ToString("0.##"))
+                  .Append(" 可用=").Append(t.avaliable);
+                try { sb.Append(" coolSpeed=").Append(t.coolSpeed.ToString("0.##")); } catch { }
+            }
+            catch (Exception e) { sb.Append("读取失败 ").Append(e.GetType().Name); }
         }
     }
 

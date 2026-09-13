@@ -1,4 +1,4 @@
-# PvZ 融合版 3.9 修改器（BepInEx 6 + Harmony + **游戏内**菜单）
+﻿# PvZ 融合版 3.9 修改器（BepInEx 6 + Harmony + **游戏内**菜单）
 
 基于 IL2CPP 逆向（`dump.cs` + Il2CppInterop 互操作程序集）编写的运行时插件。
 **不改动任何游戏本体文件**：所有修改在运行时通过 Harmony 打补丁完成。
@@ -529,6 +529,60 @@ if (k < _scroll[0] || k >= _scroll[0] + visible) continue;
 3) 关闭还原   fullCD=30 / fullCD=50                 ← 还原成功
 ```
 
+### 6.12 冷却相关的东西到底有哪些（全量核对，别再漏）
+
+用户报"手套 CD 也不行"，索性把游戏里**所有**跟冷却有关的成员列全：
+
+| 类 | 字段 / 方法 | 我原来做的 | 问题 |
+|---|---|---|---|
+| `CardUI` | `CD`, `fullCD`, `CDUpdate()`(virtual) | 写 `fullCD=0` | ✅ 已对（写 `CD` 无效，游戏每帧重算） |
+| `SpecialCard : CardUI` | 重写 `CDUpdate()` | — | 靠 `fullCD=0` 一样生效 |
+| `InGameTool`(基类) | `fullCD`, `CD`, `coolSpeed`, `avaliable`, `CDUpdate()`, `UpdateCDTimer()` | 写 `CD/fullCD/avaliable` | ⚠️ 原来**漏了 `coolSpeed`** |
+| `Glove : InGameTool` | 重写 `UpdateCDTimer()`，有 **`static Glove Instance`** | 拿 `InGameUI.GloveBank` 去 `GetComponent` | ❌ 不一定找得到；应该直接用 `Glove.Instance` |
+| `Hammer : InGameTool` | 重写 `UpdateCDTimer()`，有 **`static Hammer Instance`** | 同上 | ❌ 同上 |
+| `Shovel : InGameTool` | 不重写 | 同上 | ❌ 同上 |
+| `Wheel : InGameTool` | 不重写，**没有 static Instance** | 完全没处理 | ❌ 现在靠遍历所有 `InGameTool` 覆盖 |
+| **`Board`** | **`freeCD` (bool)** | **完全没碰** | ❌ **这才是游戏自己的"无CD模式"总开关** |
+| `Lawnf.GetGloveCD()` | static 返回 float | 后缀补丁返回 0 | ✅ 已对 |
+| `IZManager.AICard` | `cd`, `fullcd` | — | IZE 模式的 AI 出怪卡，与玩家无关，不动 |
+| `LevelData.gloveCD` | 关卡配置里的手套 CD | — | 只读配置，不用改 |
+
+所以"手套无冷却没用"是两条原因叠加：**没设 `Board.freeCD`**，而且工具的 CD 是拿
+`GameObject` 去 `GetComponent` 找的（不一定拿得到），应该直接用静态 `Instance`。
+
+改完之后实测（`ACTION|Tools` 打印真实数值）：
+
+```
+关闭: Board.freeCD=False  GetGloveCD()=10  手套 Glove: CD=0 fullCD=10 可用=False
+开启: Board.freeCD=True   GetGloveCD()=0   手套 Glove: CD=0 fullCD=0  可用=True
+还原: Board.freeCD=False  GetGloveCD()=10  手套 Glove: CD=0 fullCD=10 可用=False
+```
+
+`Board.freeCD` 会按对象保存原值并在关闭时还原，不会把游戏原本的免费冷却状态改坏。
+
+> 教训：**改这类字段前先把所有相关成员列全**（用 dump 搜 `CD`/`fullCD`/`CDUpdate`/`UpdateCDTimer`），
+> 不然很容易只改到一半。另外新增了 `ACTION|Cards` 和 `ACTION|Tools` 两条诊断指令，
+> 直接把游戏里的真实数值打出来 —— 这次两个冷却问题都是靠它们定位的。
+
+---
+
+1. **`Effects`（附加效果输入框）只记录不生效**。游戏效果走 `Dictionary<EffectType, BaseEffect>` 与
+   `eveBuffs`，正确施加需要构造 Effect 实例并调用语义未知的方法，没反编译方法体不敢贸然调。
+2. **「直接融合」靠"先 Die 再重建"**。原植物的死亡处理会跑一遍（可能有粒子/音效），
+   而且如果游戏把 Die 排到很久之后，会降级成"原地改类型"（状态栏会写明"降级"）。
+3. **「直接变成某种植物」不查融合表**，新植物是游戏按该类型正常建出来的；
+   但如果你变的是一个"需要特定前置"的植物，它的技能可能表现不完整。
+4. **单株覆盖按对象指针索引**。植物销毁后若新植物分配到同一地址，旧覆盖会套到新植物。
+   融合时已经把数值转移过去了，跨关卡建议按一下「清空全部植物修改记录」。
+5. **攻速倍率**会先缓存原始 `thePlantAttackInterval` 再换算，避免周期施加反复相除导致指数级加速（已修）。
+6. **子弹覆盖在 `Bullet.InitData` 后置生效**，每颗子弹只处理一次（防重复翻倍，已加去重）。
+7. **虚方法重写**：`Plant.TakeDamage`/`Zombie.TakeDamage` 是虚方法，补的是基类实现；
+   子类若重写则那条路径拦不住。植物无敌额外加了"周期回满血"兜底。
+8. **未做动态调试**：本插件是"按签名打补丁 + 运行时日志验证"的产物，没有下断点逐帧跟踪。
+   功能无效时把 `BepInEx\LogOutput.log` 里 `[FAIL]`/`[融合]`/`[词条白名单]` 开头的行发我。
+
+---
+
 ## 7. 实测验证
 
 ### 7.1 默认居然还开着作弊？—— 是调试时用 IPC 写脏了配置
@@ -599,23 +653,6 @@ if (k < _scroll[0] || k >= _scroll[0] + visible) continue;
 ---
 
 ## 8. 已知限制（诚实说明）
-
-1. **`Effects`（附加效果输入框）只记录不生效**。游戏效果走 `Dictionary<EffectType, BaseEffect>` 与
-   `eveBuffs`，正确施加需要构造 Effect 实例并调用语义未知的方法，没反编译方法体不敢贸然调。
-2. **「直接融合」靠"先 Die 再重建"**。原植物的死亡处理会跑一遍（可能有粒子/音效），
-   而且如果游戏把 Die 排到很久之后，会降级成"原地改类型"（状态栏会写明"降级"）。
-3. **「直接变成某种植物」不查融合表**，新植物是游戏按该类型正常建出来的；
-   但如果你变的是一个"需要特定前置"的植物，它的技能可能表现不完整。
-4. **单株覆盖按对象指针索引**。植物销毁后若新植物分配到同一地址，旧覆盖会套到新植物。
-   融合时已经把数值转移过去了，跨关卡建议按一下「清空全部植物修改记录」。
-5. **攻速倍率**会先缓存原始 `thePlantAttackInterval` 再换算，避免周期施加反复相除导致指数级加速（已修）。
-6. **子弹覆盖在 `Bullet.InitData` 后置生效**，每颗子弹只处理一次（防重复翻倍，已加去重）。
-7. **虚方法重写**：`Plant.TakeDamage`/`Zombie.TakeDamage` 是虚方法，补的是基类实现；
-   子类若重写则那条路径拦不住。植物无敌额外加了"周期回满血"兜底。
-8. **未做动态调试**：本插件是"按签名打补丁 + 运行时日志验证"的产物，没有下断点逐帧跟踪。
-   功能无效时把 `BepInEx\LogOutput.log` 里 `[FAIL]`/`[融合]`/`[词条白名单]` 开头的行发我。
-
----
 
 ## 9. 工程文件
 

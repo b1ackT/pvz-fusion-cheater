@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using BepInEx.Configuration;
@@ -240,12 +240,28 @@ namespace PvzRhCheat
             {
                 ConfigEntryBase e = ByKey(kv[0]);
                 if (e == null) continue;
-                string cur = GetString(e);
-                if (cur == kv[1]) continue;
+                // 必须把 bool 的 "True"/"False" 与 "1"/"0" 视为等价，
+                // 否则全新配置也会被算成"改了 22 项"（日志会骗人）。
+                if (SameValue(GetString(e), kv[1])) continue;
                 SetFromString(e, kv[1]);
                 n++;
             }
             return n;
+        }
+
+        private static bool SameValue(string cur, string want)
+        {
+            if (cur == null) cur = "";
+            if (cur.Equals(want, StringComparison.OrdinalIgnoreCase)) return true;
+            bool curTrue = cur == "True" || cur == "1";
+            bool curFalse = cur == "False" || cur == "0" || cur.Length == 0;
+            if (want == "1") return curTrue;
+            if (want == "0") return curFalse;
+            double a, b;
+            if (double.TryParse(cur, NumberStyles.Float, CultureInfo.InvariantCulture, out a) &&
+                double.TryParse(want, NumberStyles.Float, CultureInfo.InvariantCulture, out b))
+                return Math.Abs(a - b) < 0.0001d;
+            return false;
         }
 
         // ---------------------------------------------------------------- 热键
