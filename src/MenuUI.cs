@@ -42,7 +42,8 @@ namespace PvzRhCheat
         private static Vector2 _dragOff;
 
         // 正在编辑的东西
-        private const int EK_NONE = 0, EK_PLANT = 1, EK_CONFIG = 2, EK_FILTER = 3, EK_SB = 4, EK_ZOMBIE = 5, EK_SPEED = 6;
+        private const int EK_NONE = 0, EK_PLANT = 1, EK_CONFIG = 2, EK_FILTER = 3, EK_SB = 4, EK_ZOMBIE = 5, EK_SPEED = 6,
+                          EK_LUCK = 7, EK_LUCKMAX = 8, EK_FUSELEVEL = 9;
         private static int _editKind = EK_NONE;
         /// <summary>
         /// true = 输入框里是"预填的当前值"，用户**第一个字符就整段替换**。
@@ -126,13 +127,13 @@ namespace PvzRhCheat
         private static readonly string[] GroupNames =
         {
             "通用", "解锁与资源", "关卡内", "战斗", "旅行 / 词条", "天赋", "深渊抽奖券",
-            "经典作弊", "速度 · 僵尸 · 工具", "界面与 ESP",
+            "经典作弊", "速度 · 僵尸 · 工具", "界面与 ESP", "诸神幸运",
         };
 
         private static readonly string[] GroupHints =
         {
             "总开关、重刷间隔", "关卡·图鉴·金币", "阳光不减", "无敌 / 伤害倍率", "Roguelike 词条池", "冒险天赋树",
-            "抽奖券", "原版经典功能", "倍速 / 出怪 / 冷却", "字号、外置窗口",
+            "抽奖券", "原版经典功能", "倍速 / 出怪 / 冷却", "字号、外置窗口", "改幸运（专用页）",
         };
 
         private static readonly string[][] GroupKeys =
@@ -147,6 +148,8 @@ namespace PvzRhCheat
             new[] { "AutoCollectSun", "NoCardCooldown", "FreePlanting", "UnlimitedCardUse", "FreezeAllZombies", "ZombiesStopMoving", "AutoKillZombies", "PlantWholeLine", "PlantLineDir" },
             new[] { "GameSpeed", "StopZombieSpawn", "ZombieInvincible", "ZombieHpMultiplier", "NoToolCooldown" },
             new[] { "EspFontSize", "EspBold", "MenuFontSize", "AutoLaunchUi" },
+            new[] { "LuckyValue", "LuckyMaxValue", "LuckyLock" },
+            new[] { "FuseUpgradeLevel" },
         };
 
         private static readonly Dictionary<string, string> Cn = new Dictionary<string, string>(StringComparer.Ordinal)
@@ -193,13 +196,17 @@ namespace PvzRhCheat
             { "ZombieHpMultiplier", "僵尸血量倍率" },
             { "NoToolCooldown", "手套 / 锤子无冷却" },
             { "UnlockAllPlants", "植物图鉴 / 植物池全解锁" },
+            { "LuckyValue", "幸运值（诸神模式，点一次应用一次）" },
+            { "LuckyMaxValue", "幸运上限（0 = 不改）" },
+            { "LuckyLock", "常驻锁定幸运（每 0.25 秒拉回设定值）" },
+            { "FuseUpgradeLevel", "融合/变身之后把结果升到几级（0 = 不升）" },
         };
 
-        private static readonly string[] TabNames = { "功能开关", "植物", "僵尸", "融合", "沙盒", "作弊动作", "设置" };
+        private static readonly string[] TabNames = { "功能开关", "植物", "僵尸", "融合", "沙盒", "诸神幸运", "作弊动作", "设置" };
 
         /// <summary>构建时间戳（编译时生成），用来一眼确认跑的是哪一版</summary>
         internal static readonly string BuildStamp =
-            new DateTime(2026, 9, 13, 18, 45, 0, DateTimeKind.Local).ToString("yyyy-MM-dd HH:mm");
+            new DateTime(2026, 9, 13, 19, 45, 0, DateTimeKind.Local).ToString("yyyy-MM-dd HH:mm");
 
         // ---------------------------------------------------------------- 对外
         /// <summary>鼠标是否压在菜单上 —— 用来屏蔽游戏自己的鼠标操作</summary>
@@ -265,7 +272,8 @@ namespace PvzRhCheat
                         case 2: TabZombies(cr); break;
                         case 3: TabFusion(cr); break;
                         case 4: TabSandbox(cr); break;
-                        case 5: TabActions(cr); break;
+                        case 5: TabLuck(cr); break;
+                        case 6: TabActions(cr); break;
                         default: TabSettings(cr); break;
                     }
                 }
@@ -297,7 +305,7 @@ namespace PvzRhCheat
             Rect closeR = new Rect(t.xMax - 54f, t.y + 2f, 48f, 21f);
 
             UiSkin.Text(new Rect(t.x + 10f, t.y, espR.x - t.x - 16f, t.height),
-                        "PVZ 融合版 3.9 修改器   " + Plugin.Version + "（内置界面 · 7 页签）", UiSkin.Bold);
+                        "PVZ 融合版 3.9 修改器   " + Plugin.Version + "（内置界面 · 8 页签）", UiSkin.Bold);
 
             if (UiSkin.SmallButton(espR, esp ? "ESP: 开" : "ESP: 关", esp, true))
                 EspOverlay.ShowEsp = !esp;
@@ -536,6 +544,39 @@ namespace PvzRhCheat
             _editField = -1;
             _editKey = null;
             _editBuf = "";
+
+            if (kind == EK_FUSELEVEL)
+            {
+                int v;
+                if (!int.TryParse(buf, NumberStyles.Integer, CultureInfo.InvariantCulture, out v))
+                { SetStatus("不是合法整数（0 = 融合后不升级）"); return; }
+                if (v < 0) v = 0;
+                if (v > 99) v = 99;
+                ModConfig.FuseUpgradeLevel.Value = v;
+                SetStatus(v > 0 ? ("融合 / 变身之后，结果植物会直接设成 " + v + " 级")
+                                : "融合之后不再改等级");
+                return;
+            }
+
+            if (kind == EK_LUCK || kind == EK_LUCKMAX)
+            {
+                float v;
+                if (!float.TryParse(buf, NumberStyles.Float, CultureInfo.InvariantCulture, out v))
+                { SetStatus("不是合法数字（例：50 / 300 / 9999）"); return; }
+                if (v < 0f) v = 0f;
+                if (v > 999999f) v = 999999f;
+                if (kind == EK_LUCK)
+                {
+                    ModConfig.LuckyValue.Value = v;
+                    SetStatus(LuckDb.ApplyNow(v, -1f));
+                }
+                else
+                {
+                    ModConfig.LuckyMaxValue.Value = v;
+                    SetStatus(v <= 0f ? "幸运上限已设为「不改」" : LuckDb.ApplyNow(-1f, v));
+                }
+                return;
+            }
 
             if (kind == EK_FILTER) { _pickerFilter = buf; _pickerPage = 0; return; }
 
@@ -949,6 +990,47 @@ namespace PvzRhCheat
 
         internal static int MarkCount { get { return _multi.Count; } }
 
+        /// <summary>当前批量操作的目标（勾选了就用勾选的，没勾就用单选那株）；
+        /// 顺便把已经不在场上的指针清掉。</summary>
+        internal static System.Collections.Generic.List<Plant> PlantTargets()
+        {
+            return EditTargets(Actions.SelectedPlant());
+        }
+
+        /// <summary>目标里的类型分布（用来提示"是不是同一种植物"）</summary>
+        internal static string TargetSummary(System.Collections.Generic.List<Plant> ts)
+        {
+            if (ts == null || ts.Count == 0) return "没有目标";
+            var cnt = new System.Collections.Generic.Dictionary<int, int>();
+            for (int i = 0; i < ts.Count; i++)
+            {
+                int t = -1;
+                try { t = (int)ts[i].thePlantType; } catch { }
+                int c;
+                cnt.TryGetValue(t, out c);
+                cnt[t] = c + 1;
+            }
+            var sb = new System.Text.StringBuilder(80);
+            sb.Append(ts.Count).Append(" 株");
+            if (cnt.Count == 1)
+            {
+                foreach (var kv in cnt) sb.Append("（全部是 ").Append(PlantDb.CnName(kv.Key)).Append("）");
+            }
+            else
+            {
+                sb.Append("（").Append(cnt.Count).Append(" 种：");
+                int k = 0;
+                foreach (var kv in cnt)
+                {
+                    if (k++ > 0) sb.Append("、");
+                    sb.Append(PlantDb.CnName(kv.Key)).Append("×").Append(kv.Value);
+                    if (k >= 4) { sb.Append("…"); break; }
+                }
+                sb.Append("）");
+            }
+            return sb.ToString();
+        }
+
         internal static bool IsMarked(Plant p)
         {
             if (p == null) return false;
@@ -1022,7 +1104,7 @@ namespace PvzRhCheat
         }
 
         /// <summary>批量修改的目标：有勾选就只改勾选的，否则改单选的</summary>
-        private static System.Collections.Generic.List<Plant> EditTargets(Plant selP)
+        internal static System.Collections.Generic.List<Plant> EditTargets(Plant selP)
         {
             var res = new System.Collections.Generic.List<Plant>();
             var list = Actions.PlantsSnapshot();
@@ -1409,10 +1491,17 @@ namespace PvzRhCheat
             int sel = Actions.SelectedIndex();
             Plant selP = sel >= 0 ? Actions.PlantAt(sel) : null;
 
+            // 多选（勾选/框选出来的）就是批量融合的目标；没勾选时才用单选的
+            var targets = PlantTargets();
+            bool batch = targets.Count > 1;
+            if (selP == null && targets.Count > 0) selP = targets[0];
+
             if (selP == null)
             {
-                UiSkin.Text(new Rect(cr.x + 8f, cr.y + 8f, cr.width - 16f, 100f),
-                    "先在「植物」页（或点场上植物上方的方框）选中一株植物，\n这里会列出它全部的中文融合配方，并且能改掉任意一条配方的结果。",
+                UiSkin.Text(new Rect(cr.x + 8f, cr.y + 8f, cr.width - 16f, 110f),
+                    "先在「植物」页（或点场上植物上方的方框）选中一株植物，\n这里会列出它全部的中文融合配方，并且能改掉任意一条配方的结果。\n\n" +
+                    "【批量】勾选好几株（或在战场上左键拖框选中）之后，\n" +
+                    "这里的「直接融合」会一次作用到所有勾选的植物（同一伙伴、逐株处理）。",
                     new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
                 return;
             }
@@ -1430,14 +1519,52 @@ namespace PvzRhCheat
 
             string parents = PlantDb.ParentsOf(t);
             if (!string.IsNullOrEmpty(parents))
-                UiSkin.Text(new Rect(cr.x + 4f, top, cr.width - 8f, 18f), "合成来源: " + parents,
+                UiSkin.Text(new Rect(cr.x + 4f, top, cr.width - 350f, 18f), "合成来源: " + parents,
                     new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColGreen });
             else
-                UiSkin.Text(new Rect(cr.x + 4f, top, cr.width - 8f, 18f), "合成来源: 基础植物（不能由两种植物合成得到）",
+                UiSkin.Text(new Rect(cr.x + 4f, top, cr.width - 350f, 18f), "合成来源: 基础植物（不能由两种植物合成得到）",
                     new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+
+            // 右侧：融合后升级到几级（v1.7.0）
+            Rect lv = new Rect(cr.xMax - 330f, top - 1f, 150f, 20f);
+            bool eLv = _editKind == EK_FUSELEVEL;
+            string lvTxt = eLv ? ("融合后升级: " + _editBuf + "_")
+                               : ("融合后升级: " + (ModConfig.FuseUpgradeLevel.Value > 0 ? (ModConfig.FuseUpgradeLevel.Value + " 级") : "不升") + "  ← 点这里");
+            UiSkin.Text(lv, UiSkin.Fit(lvTxt, 30),
+                new UiSkin.TextOpt
+                {
+                    Align = TextAnchor.MiddleLeft,
+                    Style = eLv ? FontStyle.Bold : FontStyle.Normal,
+                    Color = eLv ? UiSkin.ColYellow : (ModConfig.FuseUpgradeLevel.Value > 0 ? UiSkin.ColYellow : UiSkin.ColDim)
+                });
+            if (UiSkin.Click(lv, 0)) BeginEditFuseLevel();
+            UiSkin.Text(new Rect(cr.xMax - 176f, top - 1f, 172f, 20f), "（0 = 融合后不动等级）",
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
             top += 20f;
 
-            float bottomH = 100f;
+            // 批量横幅
+            if (batch)
+            {
+                Rect banner = new Rect(cr.x + 4f, top, cr.width - 8f, RowH);
+                Fill(banner, new Color(0.14f, 0.24f, 0.38f, 1f));
+                UiSkin.Border(banner, new Color(0.45f, 0.72f, 1f, 1f));
+                UiSkin.Text(new Rect(banner.x + 6f, banner.y, banner.width - 12f, banner.height),
+                    "★ 批量模式：目标 = " + TargetSummary(targets) + " —— 下面每个「直接融合」都会一次作用到它们全部（逐株处理）",
+                    new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Bold, Color = new Color(0.80f, 0.90f, 1f, 1f) });
+                top += RowH + 2f;
+            }
+            else if (_multi.Count > 0)
+            {
+                Rect banner = new Rect(cr.x + 4f, top, cr.width - 8f, RowH);
+                Fill(banner, new Color(0.14f, 0.24f, 0.38f, 1f));
+                UiSkin.Border(banner, new Color(0.45f, 0.72f, 1f, 1f));
+                UiSkin.Text(new Rect(banner.x + 6f, banner.y, banner.width - 12f, banner.height),
+                    "★ 已勾选 " + _multi.Count + " 株（同类型生效）——下面每个「直接融合」会一次作用到它们全部",
+                    new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Bold, Color = new Color(0.80f, 0.90f, 1f, 1f) });
+                top += RowH + 2f;
+            }
+
+            float bottomH = 122f;
             Rect listArea = new Rect(cr.x, top, cr.width, cr.height - (top - cr.y) - bottomH);
             Fill(listArea, UiSkin.ColBack2);
             UiSkin.Border(listArea, UiSkin.ColLine);
@@ -1449,10 +1576,13 @@ namespace PvzRhCheat
             if (w != 0 && UiSkin.MouseOver(listArea)) { _scroll[2] = Mathf.Clamp(_scroll[2] + w, 0, maxScroll); _wheel = 0; }
 
             UiSkin.Text(new Rect(listArea.x + 6f, listArea.y + 2f, listArea.width - 12f, 20f),
-                "伙伴植物  →  当前融合结果      点「直接融合」= 让这株和该伙伴当场融合；点「改结果」= 改掉融合表里这条配方", UiSkin.Bold);
+                batch ? "伙伴植物  →  当前融合结果      【批量】「直接融合」= 勾选的每一株都和该伙伴融合一次"
+                      : "伙伴植物  →  当前融合结果      点「直接融合」= 让这株和该伙伴当场融合；点「改结果」= 改掉融合表里这条配方",
+                UiSkin.Bold);
 
             long selfPtr = 0L;
             try { selfPtr = selP.Pointer.ToInt64(); } catch { }
+            long[] batchPtrs = BatchPtrs(targets);
 
             float y = listArea.y + 22f;
             if (recipes == 0)
@@ -1467,15 +1597,19 @@ namespace PvzRhCheat
                 int result = PlantDb.RecipeResult(i);
                 Rect r = new Rect(listArea.x + 4f, y, listArea.width - 8f, rh);
                 Fill(r, UiSkin.ColBack);
-                UiSkin.Text(new Rect(r.x + 8f, r.y, r.width - 200f, rh),
+                UiSkin.Text(new Rect(r.x + 8f, r.y, r.width - 260f, rh),
                     UiSkin.Fit(PlantDb.CnName(partner) + "  (#" + partner + ")   →   " + PlantDb.CnName(result) + "  (#" + result + ")", 40),
                     UiSkin.Left);
-                Rect bFuse = new Rect(r.xMax - 190f, r.y + 1f, 92f, rh - 2f);
+                Rect bFuse = new Rect(r.xMax - 250f, r.y + 1f, batch ? 132f : 92f, rh - 2f);
                 Rect bEdit = new Rect(r.xMax - 94f, r.y + 1f, 90f, rh - 2f);
-                if (UiSkin.Button(bFuse, "直接融合", false, true))
+                if (UiSkin.Button(bFuse, batch ? ("批量直接融合 ×" + targets.Count) : "直接融合", false, true))
                 {
-                    Actions.RequestFuse(selfPtr, partner);
-                    SetStatus("正在融合：" + PlantDb.CnName(t) + " + " + PlantDb.CnName(partner) + " …");
+                    if (batch) FireFuseBatch(batchPtrs, partner);
+                    else
+                    {
+                        Actions.RequestFuse(selfPtr, partner);
+                        SetStatus("正在融合：" + PlantDb.CnName(t) + " + " + PlantDb.CnName(partner) + " …");
+                    }
                 }
                 if (UiSkin.Button(bEdit, "改结果…", false, true))
                 {
@@ -1491,7 +1625,7 @@ namespace PvzRhCheat
             Fill(cus, UiSkin.ColBack2);
             UiSkin.Border(cus, UiSkin.ColLine);
             UiSkin.Text(new Rect(cus.x + 6f, cus.y + 2f, cus.width - 12f, 18f),
-                "自己加一条 / 换一条配方", UiSkin.Bold);
+                "自己加一条 / 换一条配方      （下面「批量」按钮作用到：" + TargetSummary(targets) + "）", UiSkin.Bold);
 
             Rect p1 = new Rect(cus.x + 6f, cus.y + 22f, cus.width * 0.30f, 22f);
             Rect p2 = new Rect(cus.x + 6f + cus.width * 0.31f, cus.y + 22f, cus.width * 0.30f, 22f);
@@ -1509,25 +1643,80 @@ namespace PvzRhCheat
                 else SetStatus(PlantDb.AddRecipe(t, _recipePartner, _recipeResult));
             }
 
-            Rect t1 = new Rect(cus.x + 6f, cus.y + 48f, 150f, 22f);
-            Rect t2 = new Rect(cus.x + 162f, cus.y + 48f, 190f, 22f);
-            if (UiSkin.Button(t1, "用伙伴直接融合", false, _recipePartner >= 0))
+            Rect t1 = new Rect(cus.x + 6f, cus.y + 48f, 168f, 22f);
+            Rect t2 = new Rect(cus.x + 178f, cus.y + 48f, 168f, 22f);
+            Rect t3 = new Rect(cus.x + 350f, cus.y + 48f, 150f, 22f);
+            if (UiSkin.Button(t1, batch ? ("用伙伴批量融合 ×" + targets.Count) : "用伙伴直接融合", false, _recipePartner >= 0))
             {
-                Actions.RequestFuse(selfPtr, _recipePartner);
-                SetStatus("正在融合：" + PlantDb.CnName(t) + " + " + PlantDb.CnName(_recipePartner) + " …");
+                if (batch) FireFuseBatch(batchPtrs, _recipePartner);
+                else
+                {
+                    Actions.RequestFuse(selfPtr, _recipePartner);
+                    SetStatus("正在融合：" + PlantDb.CnName(t) + " + " + PlantDb.CnName(_recipePartner) + " …");
+                }
             }
-            if (UiSkin.Button(t2, "直接变成「结果」那种", false, _recipeResult >= 0))
+            if (UiSkin.Button(t2, batch ? ("批量变成「结果」×" + targets.Count) : "直接变成「结果」那种", false, _recipeResult >= 0))
             {
-                string err = PlantDb.Transform(selP, _recipeResult);
-                SetStatus(err == null ? ("已直接变身成 " + PlantDb.CnName(_recipeResult)) : ("变身失败: " + err));
+                if (batch)
+                {
+                    Actions.RequestTransmuteBatch(batchPtrs, _recipeResult);
+                    SetStatus("正在批量变身：" + targets.Count + " 株 → " + PlantDb.CnName(_recipeResult) + " …");
+                }
+                else
+                {
+                    string err = PlantDb.Transform(selP, _recipeResult);
+                    SetStatus(err == null ? ("已直接变身成 " + PlantDb.CnName(_recipeResult)) : ("变身失败: " + err));
+                }
             }
-            UiSkin.Text(new Rect(cus.x + 358f, cus.y + 48f, cus.width - 364f, 22f),
-                "「直接融合」会先让原植物退场、再让游戏在空格子上新建结果植物（模型/血量/子弹都按融合体重算）",
+            if (UiSkin.Button(t3, batch ? ("批量升级到 " + LvText() + " 级") : ("升级到 " + LvText() + " 级"), false, ModConfig.FuseUpgradeLevel.Value > 0))
+            {
+                int lvl = ModConfig.FuseUpgradeLevel.Value;
+                int ok = 0;
+                foreach (Plant tp in targets) if (Actions.SetPlantLevel(tp, lvl)) ok++;
+                SetStatus("已把 " + ok + " 株植物升到 " + lvl + " 级");
+            }
+            UiSkin.Text(new Rect(cus.x + 508f, cus.y + 48f, cus.width - 514f, 22f),
+                batch ? "批量 = 逐株「先 Die 腾格子 → 游戏新建」，所以会一株一株慢慢来（状态栏有进度）"
+                      : "「直接融合」会先让原植物退场、再让游戏在空格子上新建结果植物（模型/血量/子弹都按融合体重算）",
                 new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
 
             UiSkin.Text(new Rect(cus.x + 6f, cus.y + 74f, cus.width - 12f, 20f),
-                "「写入配方」的含义：" + PlantDb.CnName(t) + " 与所选伙伴放在一起时，融合结果换成你所选的那种。写入后会立刻用游戏自己的查表接口校验。",
+                "「写入配方」的含义：" + PlantDb.CnName(t) + " 与所选伙伴放在一起时，融合结果换成你所选的那种。写入后会立刻用游戏自己的查表接口校验。"
+                + "　「融合后升级」= 每株融合出来的结果植物直接设成该等级（0 = 不管）。",
                 new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+        }
+
+        private static string LvText()
+        {
+            int lv = ModConfig.FuseUpgradeLevel.Value;
+            return lv > 0 ? lv.ToString() : "?";
+        }
+
+        private static long[] BatchPtrs(System.Collections.Generic.List<Plant> ts)
+        {
+            var list = new System.Collections.Generic.List<long>(ts.Count);
+            for (int i = 0; i < ts.Count; i++)
+            {
+                try { if (ts[i] != null) list.Add(ts[i].Pointer.ToInt64()); } catch { }
+            }
+            return list.ToArray();
+        }
+
+        private static void FireFuseBatch(long[] ptrs, int partner)
+        {
+            if (ptrs == null || ptrs.Length == 0) { SetStatus("没有目标植物"); return; }
+            Actions.RequestFuseBatch(ptrs, partner);
+            SetStatus("已排入 " + ptrs.Length + " 株 × " + PlantDb.CnName(partner)
+                    + " 的批量融合（逐株处理，进度看状态栏）");
+        }
+
+        private static void BeginEditFuseLevel()
+        {
+            _editKind = EK_FUSELEVEL;
+            _editBuf = ModConfig.FuseUpgradeLevel.Value.ToString(CultureInfo.InvariantCulture);
+            _editText = false;
+            _editFresh = true;
+            SetStatus("输入融合/变身之后要给结果植物设置的等级（0 = 不升）");
         }
 
         // ================================================================ 页 3 沙盒
@@ -1664,7 +1853,183 @@ namespace PvzRhCheat
             }
         }
 
-        // ================================================================ 页 4 作弊动作
+        // ================================================================ 页 5 诸神幸运
+        /// <summary>
+        /// 诸神（射击 / 诸神进化 / 无尽 / 炼狱）的幸运修改。
+        /// 幸运越高，抽词条出高品质的概率越高；游戏自身的说明由 `ShootingManager.LuckyString` 提供。
+        /// </summary>
+        private static void TabLuck(Rect cr)
+        {
+            float x0 = cr.x + 4f;
+            float w = cr.width - 8f;
+            float y = cr.y + 6f;
+            bool on = LuckDb.Available;
+
+            // ---------------- 实时读数
+            Rect info = new Rect(x0, y, w, 78f);
+            Fill(info, on ? new Color(0.13f, 0.20f, 0.16f, 1f) : new Color(0.16f, 0.13f, 0.13f, 1f));
+            UiSkin.Border(info, on ? UiSkin.ColGreen : UiSkin.ColRed);
+
+            UiSkin.Text(new Rect(info.x + 8f, info.y + 2f, info.width - 16f, 20f),
+                on ? ("诸神模式： " + LuckDb.ModeText()) : "当前不在诸神类模式",
+                on ? UiSkin.Bold : new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Bold, Color = UiSkin.ColRed });
+
+            string line2;
+            string line3;
+            if (on)
+            {
+                float cur = LuckDb.Lucky(), mx = LuckDb.MaxLucky();
+                line2 = "当前幸运：" + cur.ToString("0.###") + " / 上限 " + mx.ToString("0.###")
+                      + "      配置里的目标值：" + ModConfig.LuckyValue.Value.ToString("0.###");
+                line3 = UiSkin.Fit(LuckDb.LuckyString().Replace("\n", "  "), 78);
+                if (string.IsNullOrEmpty(line3)) line3 = "（游戏暂未返回幸运说明文本）";
+            }
+            else
+            {
+                line2 = "进「诸神」系列关卡（诸神：射击 / 诸神进化 / 无尽 / 炼狱）后，这里才会读到数值。";
+                line3 = "普通关卡、冒险、旅行、深渊都没有 ShootingManager，本页的按钮会提示“不在诸神模式”。";
+            }
+            UiSkin.Text(new Rect(info.x + 8f, info.y + 23f, info.width - 16f, 20f), line2,
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Bold, Color = UiSkin.ColYellow });
+            UiSkin.Text(new Rect(info.x + 8f, info.y + 44f, info.width - 208f, 30f), line3,
+                new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+            // 不在诸神模式时给个快捷入口（诸神 = 挑战第 140 关 RogueShooting）
+            if (!on)
+            {
+                Rect go = new Rect(info.xMax - 200f, info.y + 22f, 96f, 24f);
+                Rect go2 = new Rect(info.xMax - 200f, info.y + 48f, 96f, 24f);
+                if (UiSkin.Button(go, "进诸神(140)", false, true))
+                    SetStatus(Actions.ActionEnterGame(1, 140));
+                if (UiSkin.Button(go2, "进炼狱(194)", false, true))
+                    SetStatus(Actions.ActionEnterGame(1, 194));
+            }
+            y += 86f;
+
+            // ---------------- 输入框 + 应用
+            UiSkin.Text(new Rect(x0, y, w, 20f), "幸运值（点框输入，回车即应用一次；上限会自动跟上）", UiSkin.Bold);
+            y += 22f;
+            bool eL = _editKind == EK_LUCK, eM = _editKind == EK_LUCKMAX;
+
+            Rect boxL = new Rect(x0, y, 150f, 24f);
+            Fill(boxL, eL ? UiSkin.ColEdit : new Color(0.07f, 0.08f, 0.10f, 1f));
+            UiSkin.Border(boxL, eL ? UiSkin.ColYellow : UiSkin.ColLine);
+            UiSkin.Text(new Rect(boxL.x + 6f, boxL.y, boxL.width - 10f, boxL.height),
+                eL ? ("幸运: " + _editBuf + "_") : ("幸运: " + ModConfig.LuckyValue.Value.ToString("0.###") + "   ← 点这里"),
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = eL ? FontStyle.Bold : FontStyle.Normal, Color = eL ? UiSkin.ColYellow : UiSkin.ColText });
+            if (UiSkin.Click(boxL, 0)) BeginEditLuck(false);
+
+            Rect boxM = new Rect(boxL.xMax + 8f, y, 150f, 24f);
+            Fill(boxM, eM ? UiSkin.ColEdit : new Color(0.07f, 0.08f, 0.10f, 1f));
+            UiSkin.Border(boxM, eM ? UiSkin.ColYellow : UiSkin.ColLine);
+            UiSkin.Text(new Rect(boxM.x + 6f, boxM.y, boxM.width - 10f, boxM.height),
+                eM ? ("上限: " + _editBuf + "_") : ("上限: " + ModConfig.LuckyMaxValue.Value.ToString("0.###") + "   ← 点这里"),
+                new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = eM ? FontStyle.Bold : FontStyle.Normal, Color = eM ? UiSkin.ColYellow : UiSkin.ColText });
+            if (UiSkin.Click(boxM, 0)) BeginEditLuck(true);
+
+            Rect app = new Rect(boxM.xMax + 8f, y, 110f, 24f);
+            if (UiSkin.Button(app, "应用一次", false, true))
+                SetStatus(LuckDb.ApplyNow(ModConfig.LuckyValue.Value,
+                                          ModConfig.LuckyMaxValue.Value > 0f ? ModConfig.LuckyMaxValue.Value : -1f));
+            Rect rmem = new Rect(app.xMax + 6f, y, 110f, 24f);
+            if (UiSkin.Button(rmem, "记下原值", false, true)) SetStatus(LuckDb.Remember());
+            Rect rrst = new Rect(rmem.xMax + 6f, y, 96f, 24f);
+            if (UiSkin.Button(rrst, "还原原值", false, _luckRemembered())) SetStatus(LuckDb.Restore());
+            Rect rinf = new Rect(rrst.xMax + 6f, y, 76f, 24f);
+            if (UiSkin.Button(rinf, "诊断", false, true)) SetStatus(LuckDb.Info());
+            y += 32f;
+
+            // ---------------- 快速设置
+            UiSkin.Text(new Rect(x0, y, w, 20f), "快速设置（点一下 = 立刻应用一次）", UiSkin.Bold);
+            y += 22f;
+            float[] presets = { 50f, 100f, 150f, 200f, 300f, 500f, 800f, 1000f, 5000f, 9999f };
+            float pw = (w - 9f * 6f) / 10f;
+            for (int i = 0; i < presets.Length; i++)
+            {
+                float v = presets[i];
+                Rect r = new Rect(x0 + i * (pw + 6f), y, pw, 26f);
+                bool onv = on && Math.Abs(LuckDb.Lucky() - v) < 0.01f;
+                if (UiSkin.Button(r, v.ToString("0"), onv, true))
+                {
+                    ModConfig.LuckyValue.Value = v;
+                    SetStatus(LuckDb.ApplyNow(v, -1f));
+                }
+            }
+            y += 32f;
+
+            UiSkin.Text(new Rect(x0, y, w, 20f), "幸运上限（先抬上限，幸运才不会被游戏钳回去）", UiSkin.Bold);
+            y += 22f;
+            float[] maxes = { 300f, 500f, 1000f, 3000f, 9999f };
+            float mw = 110f;
+            for (int i = 0; i < maxes.Length; i++)
+            {
+                float v = maxes[i];
+                Rect r = new Rect(x0 + i * (mw + 6f), y, mw, 26f);
+                bool onv = on && Math.Abs(LuckDb.MaxLucky() - v) < 0.01f;
+                if (UiSkin.Button(r, "上限 " + v.ToString("0"), onv, true))
+                {
+                    if (ModConfig.LuckyValue.Value > v) ModConfig.LuckyValue.Value = v;
+                    SetStatus(LuckDb.ApplyNow(-1f, v));
+                }
+            }
+            Rect dbl = new Rect(x0 + 5f * (mw + 6f), y, 118f, 26f);
+            if (UiSkin.Button(dbl, "上限 ×2", false, on))
+            {
+                float mx = LuckDb.MaxLucky();
+                if (mx <= 0f) mx = 100f;
+                SetStatus(LuckDb.ApplyNow(-1f, Mathf.Min(999999f, mx * 2f)));
+            }
+            Rect curBtn = new Rect(dbl.xMax + 6f, y, 150f, 26f);
+            if (UiSkin.Button(curBtn, "上限设为当前幸运", false, on))
+                SetStatus(LuckDb.ApplyNow(-1f, Mathf.Max(1f, LuckDb.Lucky())));
+            y += 34f;
+
+            // ---------------- 常驻锁定
+            Rect lockRow = new Rect(x0, y, w, RowH + 4f);
+            bool lk = ModConfig.LuckyLock.Value;
+            if (UiSkin.CheckRow(lockRow, lk, "常驻锁定幸运（每 0.25 秒把幸运拉回「幸运值」输入框里的数）",
+                    lk ? "已锁定" : "默认关，只应用一次", UiSkin.MouseOver(lockRow)))
+            {
+                ModConfig.LuckyLock.Value = !lk;
+                SetStatus(!lk ? "已开启常驻锁定：幸运会被每 0.25 秒拉回设定值"
+                              : "已关闭常驻锁定（幸运不再被持续改写）");
+            }
+            y += RowH + 10f;
+
+            // ---------------- 说明
+            Rect help = new Rect(x0, y, w, Mathf.Max(40f, cr.yMax - y - 2f));
+            Fill(help, UiSkin.ColBack2);
+            UiSkin.Border(help, UiSkin.ColLine);
+            UiSkin.Text(new Rect(help.x + 8f, help.y + 4f, help.width - 16f, help.height - 10f),
+                "说明：\n" +
+                "· 幸运（ShootingManager.Lucky）是「诸神」系列的核心数值：幸运越高，抽词条/开箱出高品质的概率越高，\n" +
+                "  有些词条还会直接加幸运、加幸运上限（例如「以50的幸运开局，上限增加至300」）。\n" +
+                "· 诸神对应的关卡号（挑战模式）：140 诸神进化 / 194 诸神进化·炼狱 / 173、174 诸神射击 /\n" +
+                "  149 无尽射击 / 113、121、130、159、170 射击4~8；它们共用同一个 ShootingManager。\n" +
+                "· 改的时候会**先把幸运上限抬到不低于目标值**，否则游戏的 setter 很可能把值钳回去（日志里会写明）。\n" +
+                "· 默认**只应用一次**（点档位按钮 / 输入回车 / 点「应用一次」）。游戏如果会消耗幸运，\n" +
+                "  可以打开上面的「常驻锁定」，它会每 0.25 秒把幸运拉回设定值（默认关闭）。\n" +
+                "· 想撤回就先点「记下原值」再改（进入本页后第一次改会自动记一次），之后点「还原原值」即可。\n" +
+                "· 本页只动「诸神」的幸运；旅行模式的「幸运一击率」在「功能开关 → 旅行 / 词条」里的 LuckyStrike。\n" +
+                "· 宝箱挑战（ChestChallenge）另有一套 0~30 的幸运等级，它是纯数据对象、拿不到实例，本插件不碰。",
+                new UiSkin.TextOpt { Align = TextAnchor.UpperLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });
+        }
+
+        private static bool _luckRemembered() { return LuckDb.Available; }
+
+        private static void BeginEditLuck(bool isMax)
+        {
+            _editKind = isMax ? EK_LUCKMAX : EK_LUCK;
+            float cur = isMax ? ModConfig.LuckyMaxValue.Value : ModConfig.LuckyValue.Value;
+            float live = isMax ? LuckDb.MaxLucky() : LuckDb.Lucky();
+            if (cur <= 0f && live > 0f) cur = live;      // 第一次打开就用游戏里的真实值
+            _editBuf = cur.ToString("0.###", CultureInfo.InvariantCulture);
+            _editText = false;
+            _editFresh = true;
+            SetStatus(isMax ? "输入幸运上限（回车应用一次，0 = 不改上限）"
+                            : "输入幸运值（回车应用一次；上限会自动跟上）");
+        }
+
+        // ================================================================ 页 6 作弊动作
         private static void TabActions(Rect cr)
         {
             float bw = (cr.width - 24f) / 2f;
@@ -1826,7 +2191,7 @@ namespace PvzRhCheat
             Fill(ver, new Color(0.13f, 0.20f, 0.16f, 1f));
             UiSkin.Border(ver, UiSkin.ColGreen);
             UiSkin.Text(new Rect(ver.x + 8f, ver.y + 2f, ver.width - 16f, 20f),
-                "当前版本  v" + Plugin.Version + "    （内置界面 · 7 页签）", UiSkin.Bold);
+                "当前版本  v" + Plugin.Version + "    （内置界面 · 8 页签）", UiSkin.Bold);
             string build = "构建时间 " + BuildStamp + "    补丁 " + Plugin.PatchOk + "/" + Plugin.PatchTotal;
             UiSkin.Text(new Rect(ver.x + 8f, ver.y + 21f, ver.width - 16f, 20f), build,
                 new UiSkin.TextOpt { Align = TextAnchor.MiddleLeft, Style = FontStyle.Normal, Color = UiSkin.ColDim, Dim = true });

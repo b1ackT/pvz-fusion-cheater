@@ -14,7 +14,7 @@ namespace PvzRhCheat
     {
         public const string Guid = "com.dsh.pvzrh.cheat";
         /// <summary>界面标题栏上显示的版本戳，用来确认游戏里跑的是不是最新构建</summary>
-        public const string Version = "1.5.0";
+        public const string Version = "1.7.0";
         /// <summary>补丁成功/总数（设置页显示用）</summary>
         public static int PatchOk;
         public static int PatchTotal;

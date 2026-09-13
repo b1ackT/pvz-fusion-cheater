@@ -295,6 +295,48 @@ namespace PvzRhCheat
                             if (p.Length > 2) { ModConfig.BoxSelect.Value = p[2] == "1" || p[2] == "true"; msg = "左键框选 = " + ModConfig.BoxSelect.Value; }
                             else msg = "左键框选 = " + ModConfig.BoxSelect.Value;
                             break;
+                        case "Luck":
+                            if (p.Length > 2)
+                            {
+                                float lv = F(p[2]);
+                                ModConfig.LuckyValue.Value = lv;
+                                LuckDb.Request(lv, -1f);        // 主循环里写游戏字段（IPC 线程不碰原生对象）
+                                msg = "已请求 幸运 = " + lv.ToString("0.###");
+                            }
+                            else msg = "用法: ACTION|Luck|<幸运值>";
+                            break;
+                        case "LuckMax":
+                            if (p.Length > 2)
+                            {
+                                float mv = F(p[2]);
+                                ModConfig.LuckyMaxValue.Value = mv;
+                                LuckDb.Request(-1f, mv);
+                                msg = "已请求 幸运上限 = " + mv.ToString("0.###");
+                            }
+                            else msg = "用法: ACTION|LuckMax|<上限>";
+                            break;
+                        case "LuckLock":
+                            if (p.Length > 2)
+                            {
+                                ModConfig.LuckyLock.Value = p[2] == "1" || p[2] == "true";
+                                msg = "幸运常驻锁定 = " + ModConfig.LuckyLock.Value;
+                            }
+                            else msg = "幸运常驻锁定 = " + ModConfig.LuckyLock.Value;
+                            break;
+                        case "LuckInfo": msg = LuckDb.Info(); break;
+                        case "LuckRemember": msg = LuckDb.Remember(); break;
+                        case "LuckRestore": msg = LuckDb.Restore(); break;
+                        case "ScanLevels":
+                            {
+                                int t = p.Length > 2 ? I(p[2]) : 1;
+                                Actions.RequestLevelScan(t);
+                                msg = "已请求扫描 LevelType=" + t + " 的关卡表（看日志 [关卡表]）";
+                            }
+                            break;
+                        case "CurLevel":
+                            Actions.RequestCurLevel();
+                            msg = "已请求打印当前关卡（看日志 [当前关]）";
+                            break;
                         case "BoxSel":
                             {
                                 // 自检用：直接给一个屏幕矩形走一遍框选逻辑，返回选中结果
@@ -327,6 +369,54 @@ namespace PvzRhCheat
                                 try { ptr = sp.Pointer.ToInt64(); } catch { }
                                 Actions.RequestFuse(ptr, I(p[2]));
                                 msg = "已请求融合 " + PlantDb.Label(sp) + " + " + PlantDb.CnName(I(p[2]));
+                            }
+                            break;
+                        case "FuseAll":
+                            {
+                                // ACTION|FuseAll|<伙伴类型号>  —— 把多选（勾选/框选）的植物全部与该伙伴融合
+                                if (p.Length < 3) { msg = "缺少伙伴类型号"; break; }
+                                var ts = MenuUI.PlantTargets();
+                                if (ts.Count == 0) { msg = "没有目标植物"; break; }
+                                var arr = new System.Collections.Generic.List<long>(ts.Count);
+                                foreach (Plant x in ts) { try { arr.Add(x.Pointer.ToInt64()); } catch { } }
+                                Actions.RequestFuseBatch(arr, I(p[2]));
+                                msg = "已排入 " + arr.Count + " 株 × " + PlantDb.CnName(I(p[2])) + " 的批量融合";
+                            }
+                            break;
+                        case "FuseAllUp":
+                            {
+                                // ACTION|FuseAllUp|<伙伴类型号>|<等级>  —— 批量融合 + 融合后升级
+                                if (p.Length < 4) { msg = "用法: ACTION|FuseAllUp|伙伴|等级"; break; }
+                                ModConfig.FuseUpgradeLevel.Value = I(p[3]);
+                                var ts = MenuUI.PlantTargets();
+                                if (ts.Count == 0) { msg = "没有目标植物"; break; }
+                                var arr = new System.Collections.Generic.List<long>(ts.Count);
+                                foreach (Plant x in ts) { try { arr.Add(x.Pointer.ToInt64()); } catch { } }
+                                Actions.RequestFuseBatch(arr, I(p[2]));
+                                msg = "已排入 " + arr.Count + " 株 × " + PlantDb.CnName(I(p[2]))
+                                    + " 的批量融合，融合后升到 " + I(p[3]) + " 级";
+                            }
+                            break;
+                        case "UpgradeSel":
+                            {
+                                int lvl = p.Length > 2 ? I(p[2]) : 10;
+                                var ts = MenuUI.PlantTargets();
+                                int ok = 0;
+                                foreach (Plant x in ts) if (Actions.SetPlantLevel(x, lvl)) ok++;
+                                msg = "已把 " + ok + " 株植物升到 " + lvl + " 级";
+                            }
+                            break;
+                        case "TransAll":
+                            {
+                                // ACTION|TransAll|<目标类型>|<等级>  —— 批量"直接变成"
+                                if (p.Length < 3) { msg = "缺少类型"; break; }
+                                if (p.Length > 3) ModConfig.FuseUpgradeLevel.Value = I(p[3]);
+                                var ts = MenuUI.PlantTargets();
+                                if (ts.Count == 0) { msg = "没有目标植物"; break; }
+                                var arr = new System.Collections.Generic.List<long>(ts.Count);
+                                foreach (Plant x in ts) { try { arr.Add(x.Pointer.ToInt64()); } catch { } }
+                                Actions.RequestTransmuteBatch(arr, I(p[2]));
+                                msg = "已排入 " + arr.Count + " 株 → " + PlantDb.CnName(I(p[2])) + " 的批量变身";
                             }
                             break;
                         case "FusionTest":
@@ -486,6 +576,7 @@ namespace PvzRhCheat
             sb.Append(",\"zselPtr\":").Append(Actions.ZombieSelPtr());
             sb.Append(",\"mark\":").Append(MenuUI.MarkCount);
             sb.Append(",\"zmark\":").Append(MenuUI.ZombieMarkCount);
+            sb.Append(",\"luck\":").Append(LuckDb.Json);
             sb.Append(",\"zombies\":").Append(ZombiesJson());
             sb.Append(",\"srcLawnf\":").Append(Actions.SrcLawnf());
             sb.Append(",\"srcBoard\":").Append(Actions.SrcBoard());

@@ -583,9 +583,19 @@ namespace PvzRhCheat
         /// <summary>算出融合结果；返回 null 表示成功</summary>
         internal static string PlanFuse(Plant p, int partnerType, out FusePlan plan)
         {
+            return PlanFuse(p, partnerType, -1, out plan);
+        }
+
+        /// <summary>
+        /// 算出融合结果；返回 null 表示成功。
+        /// `forceResult >= 0` 时**不查融合表**，直接把结果设成它
+        /// （「直接变成某种植物」的批量版走这条路：和融合共用同一套"先腾格子再新建"的流程）。
+        /// </summary>
+        internal static string PlanFuse(Plant p, int partnerType, int forceResult, out FusePlan plan)
+        {
             plan = default(FusePlan);
             if (p == null) return "没有选中植物";
-            if (partnerType < 0) return "伙伴类型无效";
+            if (partnerType < 0 && forceResult < 0) return "伙伴类型无效";
             try
             {
                 plan.SelfType = (int)p.thePlantType;
@@ -596,6 +606,12 @@ namespace PvzRhCheat
             catch (Exception e) { return "读不到植物信息 " + e.GetType().Name; }
             plan.PartnerType = partnerType;
             plan.SelfName = CnName(plan.SelfType) + " #" + plan.SelfType;
+
+            if (forceResult >= 0)
+            {
+                plan.ResultType = forceResult;
+                return null;
+            }
 
             PlantType rt = (PlantType)(-1);
             bool found;

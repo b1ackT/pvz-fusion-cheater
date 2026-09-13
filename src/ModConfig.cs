@@ -126,6 +126,18 @@ namespace PvzRhCheat
         /// <summary>左键拖拽框选（把框到的植物/僵尸加入多选）——界面辅助，不算作弊项</summary>
         public static ConfigEntry<bool>   BoxSelect;
 
+        // ---- 诸神（射击 / 诸神进化）幸运 ----
+        /// <summary>幸运值（ShootingManager.Lucky）；只在点按钮/输入时应用一次，除非开了锁定</summary>
+        public static ConfigEntry<float>  LuckyValue;
+        /// <summary>幸运上限（ShootingManager.maxLucky）；0 = 不改</summary>
+        public static ConfigEntry<float>  LuckyMaxValue;
+        /// <summary>常驻锁定幸运（每 0.25 秒拉回设定值）——默认关</summary>
+        public static ConfigEntry<bool>   LuckyLock;
+
+        // ---- 融合 / 升级（批量）----
+        /// <summary>融合（或变身）之后把结果植物升到该等级；0 = 不升</summary>
+        public static ConfigEntry<int>    FuseUpgradeLevel;
+
         /// <summary>配置结构版本：低于当前值时把"作弊项"强制拉回全关（见 Init 里的迁移）</summary>
         public static ConfigEntry<int>    ConfigVersion;
         public const int CurrentConfigVersion = 2;
@@ -216,6 +228,18 @@ namespace PvzRhCheat
                 "Hold left mouse button and drag on the lawn to box-select plants/zombies " +
                 "(adds them to the multi-select list). UI helper, does not change the game by itself"), "BoxSelect");
 
+            // ---- 诸神幸运 ----
+            LuckyValue = Reg(cfg.Bind("B-Lucky", "LuckyValue", 0f,
+                "Lucky value for the Shooting / RogueShooting (诸神) modes. 0 = not set. " +
+                "Applied once when you press a button / enter a value; only kept if LuckyLock is on"), "LuckyValue");
+            LuckyMaxValue = Reg(cfg.Bind("B-Lucky", "LuckyMaxValue", 0f,
+                "Lucky upper bound (ShootingManager.maxLucky). 0 = leave it alone"), "LuckyMaxValue");
+            LuckyLock = Reg(cfg.Bind("B-Lucky", "LuckyLock", false,
+                "Keep pushing the lucky value back every 0.25s (the game may spend it). Default off"), "LuckyLock");
+
+            FuseUpgradeLevel = Reg(cfg.Bind("C-Fuse", "FuseUpgradeLevel", 0,
+                "After a fusion / transmute, set the resulting plant to this level. 0 = do not touch"), "FuseUpgradeLevel");
+
             ConfigVersion = Reg(cfg.Bind("A-Hotkey", "ConfigVersion", 0,
                 "Internal: config layout version, used for one-time resets"), "ConfigVersion");
 
@@ -249,6 +273,8 @@ namespace PvzRhCheat
             new[]{"ZombiesStopMoving","0"}, new[]{"AutoKillZombies","0"}, new[]{"PlantWholeLine","0"}, new[]{"PlantLineDir","col"},
             new[]{"GameSpeed","1"}, new[]{"StopZombieSpawn","0"}, new[]{"ZombieInvincible","0"},
             new[]{"ZombieHpMultiplier","1"}, new[]{"NoToolCooldown","0"}, new[]{"UnlockAllPlants","0"},
+            new[]{"LuckyValue","0"}, new[]{"LuckyMaxValue","0"}, new[]{"LuckyLock","0"},
+            new[]{"FuseUpgradeLevel","0"},
         };
 
         /// <summary>

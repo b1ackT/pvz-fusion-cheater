@@ -42,6 +42,11 @@ namespace PvzRhCheat
             // 游戏速度：**只消费一次请求**，不再每帧把 timeScale 按回去。
             // 之前每 tick 都写 = 用户点一次就被永久锁死，连游戏自己的倍速滑条都改不动。
             try { RunPendingSpeed(); } catch (Exception e) { LogSlow("FastTick/速度", e); }
+            // 诸神幸运：消费一次请求 + （可选）常驻锁定 + 刷新只读缓存
+            try { LuckDb.Tick(); } catch (Exception e) { LogSlow("FastTick/幸运", e); }
+            // 关卡表诊断（找"诸神"关号用）
+            try { RunLevelScan(); } catch (Exception e) { LogSlow("FastTick/关卡表", e); }
+            try { RunCurLevel(); } catch (Exception e) { LogSlow("FastTick/当前关", e); }
             // 卡片/工具无冷却：0.25 秒刷一次，别等 2 秒的施加周期（会看到冷却条回涨）
             try { FastCardTweak(); } catch (Exception e) { LogSlow("FastTick/卡片", e); }
             // 融合会换掉植物对象，重新读一次列表
@@ -85,29 +90,95 @@ namespace PvzRhCheat
 
         internal static void RequestFuse(long plantPtr, int partnerType)
         {
-            _fusePtr = plantPtr;
-            _fusePartner = partnerType;
+            RequestJobs(new long[] { plantPtr }, partnerType, -1, ModConfig.FuseUpgradeLevel.Value);
+        }
+
+        /// <summary>
+        /// **批量融合**：把一堆植物（通常是"选定的同种植物"）依次和同一个伙伴融合。
+        /// 一次只处理一株（每株都要"先 Die 腾格子、等空了再由游戏新建"），
+        /// 全部做完在状态栏给一句汇总。
+        /// </summary>
+        internal static void RequestFuseBatch(System.Collections.Generic.IEnumerable<long> ptrs, int partnerType)
+        {
+            RequestJobs(ptrs, partnerType, -1, ModConfig.FuseUpgradeLevel.Value);
+        }
+
+        /// <summary>批量"直接变成某种植物"（不查融合表，用同一套腾格子重建流程）</summary>
+        internal static void RequestTransmuteBatch(System.Collections.Generic.IEnumerable<long> ptrs, int typeId)
+        {
+            RequestJobs(ptrs, -1, typeId, ModConfig.FuseUpgradeLevel.Value);
+        }
+
+        private sealed class FuseJob
+        {
+            public long Ptr;
+            public int Partner;       // -1 = 不查融合表
+            public int ForceResult;   // >=0 = 直接变成它
+            public int UpgradeTo;     // >0 = 结果植物升到该等级
+        }
+
+        private static readonly System.Collections.Generic.Queue<FuseJob> _fuseJobs =
+            new System.Collections.Generic.Queue<FuseJob>();
+        private static int _fuseTotal, _fuseOk, _fuseBad;
+
+        private static void RequestJobs(System.Collections.Generic.IEnumerable<long> ptrs, int partner, int forceResult, int upgradeTo)
+        {
+            _fuseJobs.Clear();
+            int n = 0;
+            if (ptrs != null)
+                foreach (long p in ptrs) { if (p != 0L) { _fuseJobs.Enqueue(new FuseJob { Ptr = p, Partner = partner, ForceResult = forceResult, UpgradeTo = upgradeTo }); n++; } }
+            _fuseTotal = n; _fuseOk = 0; _fuseBad = 0;
             _fuseStage = FuseIdle;
             _fuseTries = 0;
             _fuseDirty = false;
+            // 立刻开始第一株（不用等下一次 tick）
+            if (n > 0)
+            {
+                var j = _fuseJobs.Dequeue();
+                _fusePtr = j.Ptr; _fusePartner = j.Partner; _fuseForce = j.ForceResult; _fuseUpgradeTo = j.UpgradeTo;
+            }
+            else { _fusePtr = 0L; _fusePartner = -1; _fuseForce = -1; _fuseUpgradeTo = 0; }
+        }
+
+        private static int _fuseForce = -1;
+        private static int _fuseUpgradeTo;
+
+        /// <summary>给一株植物设置等级（Upgrade 在这套构建里返回 false，必须兜底写 theLevel）</summary>
+        internal static bool SetPlantLevel(Plant p, int level)
+        {
+            if (p == null) return false;
+            if (level < 1) level = 1;
+            if (level > 99) level = 99;
+            try { if (p.Upgrade(level, true, false)) return true; } catch { }
+            try { p.theLevel = level; return true; } catch { return false; }
         }
 
         private static bool RefreshPlantsAgain() { bool d = _fuseDirty; _fuseDirty = false; return d; }
 
         internal static void RunPendingFuse()
         {
-            if (_fusePartner < 0) return;
+            // 队列里还有活就接着做（批量融合/批量变身就是这么串起来的）
+            if (_fusePtr == 0L && _fuseJobs.Count > 0)
+            {
+                var j = _fuseJobs.Dequeue();
+                _fusePtr = j.Ptr; _fusePartner = j.Partner; _fuseForce = j.ForceResult; _fuseUpgradeTo = j.UpgradeTo;
+                _fuseStage = FuseIdle;
+                _fuseTries = 0;
+            }
+            if (_fusePtr == 0L && _fusePartner < 0 && _fuseForce < 0) return;
+
+            bool transmute = _fuseForce >= 0;       // true = "直接变成"，false = 查融合表
 
             if (_fuseStage == FuseIdle)
             {
                 long ptr = _fusePtr;
                 int partner = _fusePartner;
                 Plant p = PlantByPtr(ptr);
-                if (p == null) { Finish("融合失败：那株植物已经不在场上了"); return; }
+                if (p == null) { FinishOne("那株植物已经不在场上了", false); return; }
 
                 PlantDb.FusePlan plan;
-                string err = PlantDb.PlanFuse(p, partner, out plan);
-                if (err != null) { Finish("融合失败：" + err); return; }
+                string err = PlantDb.PlanFuse(p, partner, _fuseForce, out plan);
+                if (err != null) { FinishOne((transmute ? "变身失败：" : "融合失败：") + err, false); return; }
 
                 // 记下位置（供阶段 1 在空格子上重建）
                 try { Vector3 wp = p.transform.position; _fusePosX = wp.x; _fusePosY = wp.y; } catch { }
@@ -116,11 +187,13 @@ namespace PvzRhCheat
                 _fuseSelfName = plan.SelfName;
                 _fuseTries = 0;
 
-                MenuUI.SetStatus("正在融合：" + plan.SelfName + " + " + PlantDb.CnName(partner) + " → "
-                               + PlantDb.CnName(plan.ResultType) + " …（先让原植物退场）");
+                MenuUI.SetStatus(transmute
+                    ? ("正在变身：" + plan.SelfName + " → " + PlantDb.CnName(plan.ResultType) + " …（先让原植物退场）")
+                    : ("正在融合：" + plan.SelfName + " + " + PlantDb.CnName(partner) + " → "
+                       + PlantDb.CnName(plan.ResultType) + " …（先让原植物退场）"));
 
                 err = PlantDb.EjectOld(p);
-                if (err != null) { Finish("融合失败：" + err); return; }
+                if (err != null) { FinishOne((transmute ? "变身失败：" : "融合失败：") + err, false); return; }
                 _fuseStage = FuseEjecting;
                 return;
             }
@@ -139,9 +212,14 @@ namespace PvzRhCheat
                 if (e2 == null && created != null)
                 {
                     PlantDb.FinishNewPlant(_fusePtr, created);
+                    // 「融合升级」：结果植物直接升到指定等级
+                    string up = "";
+                    if (_fuseUpgradeTo > 0)
+                        up = SetPlantLevel(created, _fuseUpgradeTo) ? ("，并升到 " + _fuseUpgradeTo + " 级") : "（升级失败）";
                     how = "腾空格子后由游戏新建（模型/属性完整）";
-                    Finish("融合成功：" + _fuseSelfName + " + " + PlantDb.CnName(_fusePartner) + " → "
-                         + PlantDb.Label(created) + "   方式:" + how);
+                    FinishOne((transmute ? "变身成功：" : "融合成功：") + _fuseSelfName
+                         + (transmute ? " → " : " + " + PlantDb.CnName(_fusePartner) + " → ")
+                         + PlantDb.Label(created) + up + "   方式:" + how, true);
                     return;
                 }
                 how = "重建失败 " + e2;
@@ -154,20 +232,50 @@ namespace PvzRhCheat
             // 兜底：原地改类型（模型可能不跟着换）
             Plant back = PlantDb.CellPlant(_fuseCol, _fuseRow);
             string e3 = PlantDb.InPlaceChange(back, _fuseResult);
+            if (e3 == null && _fuseUpgradeTo > 0) SetPlantLevel(back, _fuseUpgradeTo);
             _fuseDirty = true;
-            Finish(e3 == null
-                ? ("融合成功（降级）：" + _fuseSelfName + " → " + PlantDb.CnName(_fuseResult) + "，但可能只是改了类型（" + how + "）")
-                : ("融合失败：" + how + "；" + e3));
+            FinishOne(e3 == null
+                ? ((transmute ? "变身成功（降级）：" : "融合成功（降级）：") + _fuseSelfName + " → " + PlantDb.CnName(_fuseResult) + "，但可能只是改了类型（" + how + "）")
+                : ((transmute ? "变身失败：" : "融合失败：") + how + "；" + e3), e3 == null);
         }
 
-        private static void Finish(string msg)
+        /// <summary>
+        /// 一株做完的收尾：计数 → 队列里还有就继续下一株 → 全部做完给汇总。
+        /// 批量操作时**只有最后一句**是总结（中间每株一句会刷屏）。
+        /// </summary>
+        private static void FinishOne(string msg, bool ok)
         {
+            _fusePtr = 0L;
             _fusePartner = -1;
+            _fuseForce = -1;
+            _fuseUpgradeTo = 0;
             _fuseStage = FuseIdle;
             _fuseDirty = true;
-            MenuUI.SetStatus(msg);
+
+            if (ok) _fuseOk++; else _fuseBad++;
             Plugin.Log.LogInfo("[融合] " + msg);
+
+            if (_fuseJobs.Count > 0)
+            {
+                MenuUI.SetStatus(msg + "　（还剩 " + _fuseJobs.Count + " 株）");
+                return;
+            }
+
+            int total = _fuseTotal, good = _fuseOk, bad = _fuseBad;
+            _fuseTotal = _fuseOk = _fuseBad = 0;
+            if (total > 1)
+            {
+                string sum = "批量操作完成：成功 " + good + " 株 / 失败 " + bad + " 株（共 " + total + " 株）。最后一句：" + msg;
+                MenuUI.SetStatus(sum);
+                Plugin.Log.LogInfo("[融合] " + sum);
+            }
+            else
+            {
+                MenuUI.SetStatus(msg);
+            }
         }
+
+        private static void Finish(string msg) { FinishOne(msg, false); }
         private static float _nextHeartbeat;
         private static int _heartbeatLogs;
 
@@ -1360,6 +1468,65 @@ namespace PvzRhCheat
         /// 直接进关卡：UIMgr.EnterGame(LevelType, levelNumber, id, name) 是游戏自己的入口。
         /// 顺带解决"必须在关卡内才能用沙盒功能"的问题。
         /// </summary>
+        /// <summary>诊断：把某个 LevelType 的全部关卡名打出来（找"诸神"系列到底对应哪几个关号）</summary>
+        private static int _scanLevels = -1;
+
+        internal static void RequestLevelScan(int levelType) { _scanLevels = levelType; }
+
+        /// <summary>诊断：打印"当前关卡"的 LevelData（名字/类型/编号/类名）</summary>
+        private static bool _wantCurLevel;
+        internal static void RequestCurLevel() { _wantCurLevel = true; }
+        internal static void RunCurLevel()
+        {
+            if (!_wantCurLevel) return;
+            _wantCurLevel = false;
+            try
+            {
+                GameLevel.LevelData d;
+                if (!GameLevel.LevelManager.TryGetLevelData(out d) || d == null)
+                { Plugin.Log.LogInfo("[当前关] LevelManager 拿不到当前关卡数据"); return; }
+                string nm = "", cls = "";
+                int lt = -1, ln = -1, sc = -1, mw = -1;
+                try { nm = d.Name ?? ""; } catch { }
+                try { cls = d.GetType().Name; } catch { }
+                try { lt = (int)d.LevelType; } catch { }
+                try { ln = d.LevelNumber; } catch { }
+                try { sc = (int)d.SceneType; } catch { }
+                try { mw = d.MaxWave; } catch { }
+                Plugin.Log.LogInfo("[当前关] " + nm + "  类=" + cls + "  LevelType=" + lt + "  编号=" + ln
+                    + "  场景=" + sc + "  最大波=" + mw);
+            }
+            catch (Exception e) { Plugin.Log.LogInfo("[当前关] 读取失败 " + e.GetType().Name + " " + e.Message); }
+        }
+
+        internal static void RunLevelScan()
+        {
+            int t = _scanLevels;
+            if (t < 0) return;
+            _scanLevels = -1;
+            var sb = new System.Text.StringBuilder(4096);
+            int found = 0;
+            for (int n = 1; n <= 120; n++)
+            {
+                try
+                {
+                    GameLevel.LevelData d;
+                    if (!GameLevel.LevelManager.TryGetLevelData((LevelType)t, n, out d) || d == null) continue;
+                    string nm = "", cls = "";
+                    try { nm = d.Name ?? ""; } catch { }
+                    try { cls = d.GetType().Name; } catch { }
+                    sb.Append("\n[关卡表] ").Append(t).Append('/').Append(n).Append(" : ")
+                      .Append(nm).Append("   <").Append(cls).Append('>');
+                    found++;
+                }
+                catch (Exception e)
+                {
+                    sb.Append("\n[关卡表] ").Append(t).Append('/').Append(n).Append(" 读取失败: ").Append(e.GetType().Name);
+                }
+            }
+            Plugin.Log.LogInfo("[关卡表] LevelType=" + t + " 共 " + found + " 关" + sb);
+        }
+
         internal static string ActionEnterGame(int levelType, int levelNumber)
         {
             if (levelNumber < 1) levelNumber = 1;
